@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, LeadStatus, Property } from '../types';
-import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare } from 'lucide-react';
+import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../lib/utils';
@@ -20,6 +20,7 @@ export default function Leads({ user }: LeadsProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+  const [showTrash, setShowTrash] = useState(false);
 
   enum OperationType {
     CREATE = 'create',
@@ -159,20 +160,39 @@ export default function Leads({ user }: LeadsProps) {
     try {
       if (collectionName === 'properties') {
         const existingProp = properties[leadId];
+        
+        // Calculate MAO if ARV or Repairs changed
+        let updatedValue = value;
+        let additionalFields: Record<string, any> = {};
+        
+        if (field === 'arv' || field === 'repairEstimate') {
+          const currentArv = field === 'arv' ? value : (existingProp?.arv || 0);
+          const currentRepairs = field === 'repairEstimate' ? value : (existingProp?.repairEstimate || 0);
+          const mao = (currentArv * 0.70) - currentRepairs;
+          additionalFields.mao = mao;
+        }
+
         if (existingProp && existingProp.id) {
-          await updateDoc(doc(db, 'properties', existingProp.id), { [field]: value });
+          await updateDoc(doc(db, 'properties', existingProp.id), { 
+            [field]: updatedValue,
+            ...additionalFields 
+          });
         } else if (!existingProp) {
           // Check again if it was created while we were typing
           const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
           const snap = await getDocs(q);
           if (!snap.empty) {
-            await updateDoc(doc(db, 'properties', snap.docs[0].id), { [field]: value });
+            await updateDoc(doc(db, 'properties', snap.docs[0].id), { 
+              [field]: updatedValue,
+              ...additionalFields 
+            });
           } else {
             await addDoc(collection(db, 'properties'), {
               leadId,
               address: '',
               ownerUid: user.uid,
-              [field]: value
+              [field]: updatedValue,
+              ...additionalFields
             });
           }
         }
@@ -251,7 +271,32 @@ export default function Leads({ user }: LeadsProps) {
       statusHistory: arrayUnion(update),
       updatedAt: serverTimestamp()
     });
+
+    // Automation: Create tasks based on status
+    if (newStatus === 'Appointment') {
+      await addDoc(collection(db, 'tasks'), {
+        title: `Prepare Comps for ${lead.fullName}`,
+        completed: false,
+        leadId: lead.id,
+        ownerUid: user.uid,
+        dueDate: serverTimestamp(),
+        createdAt: serverTimestamp()
+      });
+      setNotification('Automation: "Prepare Comps" task created!');
+    } else if (newStatus === 'Under Contract') {
+      await addDoc(collection(db, 'tasks'), {
+        title: `Send contract to Title Co - ${lead.fullName}`,
+        completed: false,
+        leadId: lead.id,
+        ownerUid: user.uid,
+        dueDate: serverTimestamp(),
+        createdAt: serverTimestamp()
+      });
+      setNotification('Automation: "Send to Title Co" task created!');
+    }
+
     setStatusNote('');
+    setTimeout(() => setNotification(null), 3000);
   };
 
   const getStatusBadgeClass = (status: string) => {
@@ -273,26 +318,52 @@ export default function Leads({ user }: LeadsProps) {
     return new Date(ts).toLocaleDateString();
   };
 
-  const filteredLeads = leads.filter(l => 
-    l.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    l.phone.includes(searchTerm) ||
-    l.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredLeads = leads.filter(l => {
+    const matchesSearch = l.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      l.phone.includes(searchTerm) ||
+      l.email.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchesTrash = showTrash ? l.isDeleted === true : !l.isDeleted;
+    
+    return matchesSearch && matchesTrash;
+  });
 
   return (
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Leads</h1>
-          <p className="text-zinc-500 text-sm">Manage your potential deals and seller contacts</p>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
+            {showTrash ? 'Recycle Bin' : 'Leads'}
+          </h1>
+          <p className="text-zinc-500 text-sm">
+            {showTrash 
+              ? 'Restore or permanently delete your leads' 
+              : 'Manage your potential deals and seller contacts'}
+          </p>
         </div>
-        <button 
-          onClick={() => setIsModalOpen(true)}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all"
-        >
-          <Plus size={18} />
-          Add Lead
-        </button>
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <button 
+            onClick={() => setShowTrash(!showTrash)}
+            className={cn(
+              "flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold transition-all border",
+              showTrash 
+                ? "bg-zinc-800 border-zinc-700 text-white" 
+                : "bg-transparent border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700"
+            )}
+          >
+            {showTrash ? <Plus size={18} /> : <Trash2 size={18} />}
+            {showTrash ? 'Back to Leads' : 'Recycle Bin'}
+          </button>
+          {!showTrash && (
+            <button 
+              onClick={() => setIsModalOpen(true)}
+              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all"
+            >
+              <Plus size={18} />
+              Add Lead
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="relative">
@@ -352,47 +423,114 @@ export default function Leads({ user }: LeadsProps) {
 
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
-                    {deleteConfirmId === lead.id ? (
-                      <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                    {showTrash ? (
+                      <div className="flex items-center gap-2">
                         <button 
                           onClick={async (e) => {
                             e.stopPropagation();
                             try {
-                              await deleteDoc(doc(db, 'leads', lead.id));
-                              // Also delete associated property
-                              const prop = properties[lead.id];
-                              if (prop) {
-                                await deleteDoc(doc(db, 'properties', prop.id));
-                              }
-                              setDeleteConfirmId(null);
+                              await updateDoc(doc(db, 'leads', lead.id), { 
+                                isDeleted: false,
+                                deletedAt: null 
+                              });
+                              setNotification('Lead restored!');
+                              setTimeout(() => setNotification(null), 3000);
                             } catch (error) {
-                              handleFirestoreError(error, OperationType.DELETE, `leads/${lead.id}`);
+                              handleFirestoreError(error, OperationType.UPDATE, `leads/${lead.id}`);
                             }
                           }}
-                          className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
+                          className="p-2 hover:bg-emerald-500/10 rounded-lg text-zinc-600 hover:text-emerald-400 transition-all"
+                          title="Restore Lead"
                         >
-                          Confirm
+                          <RotateCcw size={16} />
                         </button>
+                        {deleteConfirmId === lead.id ? (
+                          <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                            <button 
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  await deleteDoc(doc(db, 'leads', lead.id));
+                                  const prop = properties[lead.id];
+                                  if (prop) await deleteDoc(doc(db, 'properties', prop.id));
+                                  setDeleteConfirmId(null);
+                                  setNotification('Lead permanently deleted');
+                                  setTimeout(() => setNotification(null), 3000);
+                                } catch (error) {
+                                  handleFirestoreError(error, OperationType.DELETE, `leads/${lead.id}`);
+                                }
+                              }}
+                              className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
+                            >
+                              Delete Forever
+                            </button>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setDeleteConfirmId(null);
+                              }}
+                              className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmId(lead.id);
+                            }}
+                            className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
+                            title="Delete Permanently"
+                          >
+                            <Trash size={16} />
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      deleteConfirmId === lead.id ? (
+                        <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                          <button 
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                await updateDoc(doc(db, 'leads', lead.id), { 
+                                  isDeleted: true,
+                                  deletedAt: serverTimestamp()
+                                });
+                                setDeleteConfirmId(null);
+                                setNotification('Lead moved to Recycle Bin');
+                                setTimeout(() => setNotification(null), 3000);
+                              } catch (error) {
+                                handleFirestoreError(error, OperationType.UPDATE, `leads/${lead.id}`);
+                              }
+                            }}
+                            className="px-3 py-1 bg-amber-500 text-white text-[10px] font-bold rounded-lg hover:bg-amber-600 transition-all"
+                          >
+                            Move to Trash
+                          </button>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmId(null);
+                            }}
+                            className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                      ) : (
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
-                            setDeleteConfirmId(null);
+                            setDeleteConfirmId(lead.id);
                           }}
-                          className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                          className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
+                          title="Move to Trash"
                         >
-                          <X size={14} />
+                          <Trash2 size={16} />
                         </button>
-                      </div>
-                    ) : (
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirmId(lead.id);
-                        }}
-                        className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                      )
                     )}
                   </div>
                   {expandedLead === lead.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
@@ -454,6 +592,15 @@ export default function Leads({ user }: LeadsProps) {
                               onBlur={(e) => handleSyncField('properties', null, lead.id, 'askingPrice', Number(e.target.value))}
                             />
                           </div>
+                        </div>
+                        <div className="pt-2">
+                          <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-3 flex items-center justify-between">
+                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Maximum Allowable Offer (MAO)</span>
+                            <span className="text-lg font-bold text-emerald-400">
+                              ${(properties[lead.id]?.mao || 0).toLocaleString()}
+                            </span>
+                          </div>
+                          <p className="text-[8px] text-zinc-600 mt-1 italic text-center">Formula: (ARV * 70%) - Repairs</p>
                         </div>
                       </div>
                     </div>

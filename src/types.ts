@@ -18,6 +18,8 @@ export interface Lead {
   updatedAt: any;
   ownerUid: string;
   statusHistory?: StatusUpdate[];
+  isDeleted?: boolean;
+  deletedAt?: any;
 }
 
 export interface Property {
