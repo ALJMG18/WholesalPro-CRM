@@ -20,6 +20,56 @@ export default function Leads({ user }: LeadsProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
+
+  enum OperationType {
+    CREATE = 'create',
+    UPDATE = 'update',
+    DELETE = 'delete',
+    LIST = 'list',
+    GET = 'get',
+    WRITE = 'write',
+  }
+
+  interface FirestoreErrorInfo {
+    error: string;
+    operationType: OperationType;
+    path: string | null;
+    authInfo: {
+      userId: string | undefined;
+      email: string | null | undefined;
+      emailVerified: boolean | undefined;
+      isAnonymous: boolean | undefined;
+      tenantId: string | null | undefined;
+      providerInfo: {
+        providerId: string;
+        displayName: string | null;
+        email: string | null;
+        photoUrl: string | null;
+      }[];
+    }
+  }
+
+  const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
+    const errInfo: FirestoreErrorInfo = {
+      error: error instanceof Error ? error.message : String(error),
+      authInfo: {
+        userId: user?.uid,
+        email: user?.email,
+        emailVerified: user?.emailVerified,
+        isAnonymous: user?.isAnonymous,
+        tenantId: user?.tenantId,
+        providerInfo: user?.providerData.map(provider => ({
+          providerId: provider.providerId,
+          displayName: provider.displayName,
+          email: provider.email,
+          photoUrl: provider.photoURL
+        })) || []
+      },
+      operationType,
+      path
+    };
+    console.error('Firestore Error: ', JSON.stringify(errInfo));
+  };
   const [expandedLead, setExpandedLead] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [newStatusName, setNewStatusName] = useState('');
@@ -64,21 +114,24 @@ export default function Leads({ user }: LeadsProps) {
   }, [user.uid]);
 
   useEffect(() => {
-    const fetchProperties = async () => {
-      const q = query(
-        collection(db, 'properties'),
-        where('ownerUid', '==', user.uid)
-      );
-      const snapshot = await getDocs(q);
+    const q = query(
+      collection(db, 'properties'),
+      where('ownerUid', '==', user.uid)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const props: Record<string, Property> = {};
       snapshot.docs.forEach(doc => {
         const data = doc.data() as Property;
         props[data.leadId] = { id: doc.id, ...data };
       });
       setProperties(props);
-    };
-    fetchProperties();
-  }, [leads, user.uid]);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.GET, 'properties');
+    });
+
+    return () => unsubscribe();
+  }, [user.uid]);
 
   const handleAddLead = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -100,23 +153,62 @@ export default function Leads({ user }: LeadsProps) {
     }
   };
 
-  const handleUpdateProperty = async (leadId: string, field: string, value: any) => {
-    const existingProp = properties[leadId];
+  const [tempValues, setTempValues] = useState<Record<string, any>>({});
+
+  const handleSyncField = async (collectionName: string, docId: string | null, leadId: string, field: string, value: any) => {
     try {
-      if (existingProp) {
-        await updateDoc(doc(db, 'properties', existingProp.id), { [field]: value });
-      } else {
-        const docRef = await addDoc(collection(db, 'properties'), {
-          leadId,
-          address: '',
-          ownerUid: user.uid,
-          [field]: value
-        });
-        setProperties(prev => ({ ...prev, [leadId]: { id: docRef.id, leadId, address: '', ownerUid: user.uid, [field]: value } as Property }));
+      if (collectionName === 'properties') {
+        const existingProp = properties[leadId];
+        if (existingProp && existingProp.id) {
+          await updateDoc(doc(db, 'properties', existingProp.id), { [field]: value });
+        } else if (!existingProp) {
+          // Check again if it was created while we were typing
+          const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            await updateDoc(doc(db, 'properties', snap.docs[0].id), { [field]: value });
+          } else {
+            await addDoc(collection(db, 'properties'), {
+              leadId,
+              address: '',
+              ownerUid: user.uid,
+              [field]: value
+            });
+          }
+        }
+      } else if (collectionName === 'leads' && docId) {
+        await updateDoc(doc(db, 'leads', docId), { [field]: value });
       }
+      
+      // Clear temp value after successful sync
+      setTempValues(prev => {
+        const next = { ...prev };
+        delete next[`${collectionName}-${leadId}-${field}`];
+        return next;
+      });
     } catch (error) {
-      console.error("Error updating property:", error);
+      handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${docId || 'new'}`);
     }
+  };
+
+  const getFieldValue = (collectionName: string, leadId: string, field: string, defaultValue: any) => {
+    const tempKey = `${collectionName}-${leadId}-${field}`;
+    if (tempKey in tempValues) return tempValues[tempKey];
+    
+    if (collectionName === 'properties') {
+      return properties[leadId]?.[field as keyof Property] ?? defaultValue;
+    } else if (collectionName === 'leads') {
+      const lead = leads.find(l => l.id === leadId);
+      return lead?.[field as keyof Lead] ?? defaultValue;
+    }
+    return defaultValue;
+  };
+
+  const handleUpdateProperty = async (leadId: string, field: string, value: any) => {
+    // This is now only used for immediate updates if needed, 
+    // but we'll keep it for compatibility or remove if unused.
+    // For now, let's make it use the sync logic.
+    handleSyncField('properties', null, leadId, field, value);
   };
 
   const handleCreateStatus = async () => {
@@ -263,10 +355,19 @@ export default function Leads({ user }: LeadsProps) {
                     {deleteConfirmId === lead.id ? (
                       <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
                         <button 
-                          onClick={(e) => {
+                          onClick={async (e) => {
                             e.stopPropagation();
-                            deleteDoc(doc(db, 'leads', lead.id));
-                            setDeleteConfirmId(null);
+                            try {
+                              await deleteDoc(doc(db, 'leads', lead.id));
+                              // Also delete associated property
+                              const prop = properties[lead.id];
+                              if (prop) {
+                                await deleteDoc(doc(db, 'properties', prop.id));
+                              }
+                              setDeleteConfirmId(null);
+                            } catch (error) {
+                              handleFirestoreError(error, OperationType.DELETE, `leads/${lead.id}`);
+                            }
                           }}
                           className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
                         >
@@ -316,8 +417,9 @@ export default function Leads({ user }: LeadsProps) {
                           <input 
                             type="text"
                             className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                            value={properties[lead.id]?.address || ''}
-                            onChange={(e) => handleUpdateProperty(lead.id, 'address', e.target.value)}
+                            value={getFieldValue('properties', lead.id, 'address', '')}
+                            onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-address`]: e.target.value }))}
+                            onBlur={(e) => handleSyncField('properties', null, lead.id, 'address', e.target.value)}
                             placeholder="123 Main St, City, State"
                           />
                         </div>
@@ -327,8 +429,9 @@ export default function Leads({ user }: LeadsProps) {
                             <input 
                               type="number"
                               className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={properties[lead.id]?.arv || ''}
-                              onChange={(e) => handleUpdateProperty(lead.id, 'arv', Number(e.target.value))}
+                              value={getFieldValue('properties', lead.id, 'arv', '')}
+                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-arv`]: e.target.value }))}
+                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'arv', Number(e.target.value))}
                             />
                           </div>
                           <div>
@@ -336,8 +439,9 @@ export default function Leads({ user }: LeadsProps) {
                             <input 
                               type="number"
                               className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={properties[lead.id]?.repairEstimate || ''}
-                              onChange={(e) => handleUpdateProperty(lead.id, 'repairEstimate', Number(e.target.value))}
+                              value={getFieldValue('properties', lead.id, 'repairEstimate', '')}
+                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-repairEstimate`]: e.target.value }))}
+                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'repairEstimate', Number(e.target.value))}
                             />
                           </div>
                           <div>
@@ -345,8 +449,9 @@ export default function Leads({ user }: LeadsProps) {
                             <input 
                               type="number"
                               className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={properties[lead.id]?.askingPrice || ''}
-                              onChange={(e) => handleUpdateProperty(lead.id, 'askingPrice', Number(e.target.value))}
+                              value={getFieldValue('properties', lead.id, 'askingPrice', '')}
+                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-askingPrice`]: e.target.value }))}
+                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'askingPrice', Number(e.target.value))}
                             />
                           </div>
                         </div>
@@ -407,16 +512,18 @@ export default function Leads({ user }: LeadsProps) {
                           <input 
                             type="text"
                             className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                            value={lead.source || ''}
-                            onChange={(e) => updateDoc(doc(db, 'leads', lead.id), { source: e.target.value })}
+                            value={getFieldValue('leads', lead.id, 'source', '')}
+                            onChange={(e) => setTempValues(prev => ({ ...prev, [`leads-${lead.id}-source`]: e.target.value }))}
+                            onBlur={(e) => handleSyncField('leads', lead.id, lead.id, 'source', e.target.value)}
                           />
                         </div>
                         <div>
                           <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Notes</label>
                           <textarea 
                             className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm h-24 resize-none"
-                            value={lead.notes || ''}
-                            onChange={(e) => updateDoc(doc(db, 'leads', lead.id), { notes: e.target.value })}
+                            value={getFieldValue('leads', lead.id, 'notes', '')}
+                            onChange={(e) => setTempValues(prev => ({ ...prev, [`leads-${lead.id}-notes`]: e.target.value }))}
+                            onBlur={(e) => handleSyncField('leads', lead.id, lead.id, 'notes', e.target.value)}
                           />
                         </div>
                       </div>
