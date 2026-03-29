@@ -1,0 +1,115 @@
+{
+  "entities": {
+    "Lead": {
+      "title": "Lead",
+      "description": "A potential seller lead for wholesaling.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "status": { "type": "string" },
+        "source": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "ownerUid": { "type": "string" },
+        "statusHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "status": { "type": "string" },
+              "note": { "type": "string" },
+              "timestamp": { "type": "string", "format": "date-time" }
+            }
+          }
+        }
+      },
+      "required": ["fullName", "status", "ownerUid"]
+    },
+    "Property": {
+      "title": "Property",
+      "description": "Property details associated with a lead.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "leadId": { "type": "string" },
+        "address": { "type": "string" },
+        "city": { "type": "string" },
+        "state": { "type": "string" },
+        "zip": { "type": "string" },
+        "beds": { "type": "number" },
+        "baths": { "type": "number" },
+        "sqft": { "type": "number" },
+        "yearBuilt": { "type": "number" },
+        "arv": { "type": "number", "description": "After Repair Value" },
+        "repairEstimate": { "type": "number" },
+        "askingPrice": { "type": "number" },
+        "mao": { "type": "number", "description": "Maximum Allowable Offer" },
+        "ownerUid": { "type": "string" }
+      },
+      "required": ["address", "leadId", "ownerUid"]
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "User-specific settings like custom lead statuses.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "values": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["type", "ownerUid", "values"]
+    },
+    "Task": {
+      "title": "Task",
+      "description": "Follow-up tasks for leads.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "leadId": { "type": "string" },
+        "title": { "type": "string" },
+        "dueDate": { "type": "string", "format": "date-time" },
+        "completed": { "type": "boolean" },
+        "ownerUid": { "type": "string" }
+      },
+      "required": ["title", "leadId", "ownerUid"]
+    },
+    "Buyer": {
+      "title": "Buyer",
+      "description": "A potential cash buyer for wholesale deals.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "fullName": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "buyCriteria": { "type": "string" },
+        "areas": { "type": "string" },
+        "ownerUid": { "type": "string" }
+      },
+      "required": ["fullName", "ownerUid"]
+    }
+  },
+  "firestore": {
+    "leads": {
+      "schema": "Lead",
+      "description": "Collection of seller leads."
+    },
+    "properties": {
+      "schema": "Property",
+      "description": "Collection of property details linked to leads."
+    },
+    "tasks": {
+      "schema": "Task",
+      "description": "Collection of follow-up tasks."
+    },
+    "buyers": {
+      "schema": "Buyer",
+      "description": "Collection of cash buyers."
+    }
+  }
+}
