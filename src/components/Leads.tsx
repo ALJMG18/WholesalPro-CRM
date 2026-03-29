@@ -17,6 +17,8 @@ export default function Leads({ user }: LeadsProps) {
   const [properties, setProperties] = useState<Record<string, Property>>({});
   const [customStatuses, setCustomStatuses] = useState<string[]>(['New', 'Contacted', 'Appointment', 'Under Contract', 'Closed', 'Dead']);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [leadToEdit, setLeadToEdit] = useState<Lead | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -143,12 +145,37 @@ export default function Leads({ user }: LeadsProps) {
         ...newLead,
         ownerUid: user.uid,
         createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp()
+        updatedAt: serverTimestamp(),
+        isDeleted: false
       });
       setIsModalOpen(false);
       setNewLead({ fullName: '', phone: '', email: '', status: 'New', notes: '', source: '' });
+      setNotification('Lead created successfully!');
+      setTimeout(() => setNotification(null), 3000);
     } catch (error) {
       console.error("Error adding lead:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUpdateLeadMainInfo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!leadToEdit || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await updateDoc(doc(db, 'leads', leadToEdit.id), {
+        fullName: leadToEdit.fullName,
+        phone: leadToEdit.phone,
+        email: leadToEdit.email,
+        updatedAt: serverTimestamp()
+      });
+      setIsEditModalOpen(false);
+      setLeadToEdit(null);
+      setNotification('Lead updated successfully!');
+      setTimeout(() => setNotification(null), 3000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadToEdit.id}`);
     } finally {
       setIsSubmitting(false);
     }
@@ -423,6 +450,19 @@ export default function Leads({ user }: LeadsProps) {
 
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-2">
+                    {!showTrash && (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLeadToEdit(lead);
+                          setIsEditModalOpen(true);
+                        }}
+                        className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-600 hover:text-white transition-all"
+                        title="Edit Lead Info"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                    )}
                     {showTrash ? (
                       <div className="flex items-center gap-2">
                         <button 
@@ -843,6 +883,93 @@ export default function Leads({ user }: LeadsProps) {
                     </>
                   ) : (
                     "Create Lead"
+                  )}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Lead Modal */}
+      <AnimatePresence>
+        {isEditModalOpen && leadToEdit && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsEditModalOpen(false);
+                setLeadToEdit(null);
+              }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-2xl font-bold">Edit Lead Info</h2>
+                <button onClick={() => {
+                  setIsEditModalOpen(false);
+                  setLeadToEdit(null);
+                }} className="p-2 hover:bg-zinc-800 rounded-full">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleUpdateLeadMainInfo} className="space-y-6">
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Full Name</label>
+                    <input 
+                      required
+                      type="text" 
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                      value={leadToEdit.fullName}
+                      onChange={(e) => setLeadToEdit({...leadToEdit, fullName: e.target.value})}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Phone</label>
+                      <input 
+                        type="tel" 
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                        value={leadToEdit.phone}
+                        onChange={(e) => setLeadToEdit({...leadToEdit, phone: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Email</label>
+                      <input 
+                        type="email" 
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                        value={leadToEdit.email}
+                        onChange={(e) => setLeadToEdit({...leadToEdit, email: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={cn(
+                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
+                    isSubmitting && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Changes"
                   )}
                 </button>
               </form>

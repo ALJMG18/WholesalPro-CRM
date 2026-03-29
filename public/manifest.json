@@ -1,7 +1,7 @@
 {
   "name": "WholesalePro CRM",
   "short_name": "WholesalePro",
-  "description": "Real Estate Wholesaling CRM",
+  "description": "WholesalePro CRM with Recycle Bin and Automations",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0a0a0a",
