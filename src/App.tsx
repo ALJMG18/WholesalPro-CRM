@@ -16,7 +16,12 @@ import {
   ChevronRight,
   X,
   Send,
-  ShieldAlert
+  ShieldAlert,
+  Zap,
+  Share2,
+  Map as MapIcon,
+  Settings as SettingsIcon,
+  FileText
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -33,8 +38,14 @@ import Buyers from './components/Buyers';
 import Blast from './components/Blast';
 import Login from './components/Login';
 import Admin from './components/Admin';
+import PropertyFinder from './components/PropertyFinder';
+import SkipTrace from './components/SkipTrace';
+import Affiliates from './components/Affiliates';
+import MapFinder from './components/MapFinder';
+import Settings from './components/Settings';
+import Documents from './components/Documents';
 
-type View = 'dashboard' | 'leads' | 'calculator' | 'tasks' | 'buyers' | 'blast' | 'admin';
+type View = 'dashboard' | 'leads' | 'calculator' | 'tasks' | 'buyers' | 'blast' | 'admin' | 'finder' | 'skiptrace' | 'affiliates' | 'map' | 'settings' | 'documents';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -72,11 +83,17 @@ export default function App() {
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'map', label: 'Map Search', icon: MapIcon },
     { id: 'leads', label: 'Leads', icon: Users },
+    { id: 'documents', label: 'Documents', icon: FileText },
+    { id: 'finder', label: 'PropFinder', icon: Search },
+    { id: 'skiptrace', label: 'SkipTrace', icon: Zap },
     { id: 'calculator', label: 'Deal Calc', icon: CalcIcon },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'buyers', label: 'Buyers', icon: Building2 },
     { id: 'blast', label: 'Blast', icon: Send },
+    { id: 'affiliates', label: 'Affiliates', icon: Share2 },
+    { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 
   if (isAdmin) {
@@ -190,11 +207,17 @@ export default function App() {
             transition={{ duration: 0.2 }}
           >
             {currentView === 'dashboard' && <Dashboard user={user} />}
+            {currentView === 'map' && <MapFinder />}
             {currentView === 'leads' && <Leads user={user} />}
+            {currentView === 'documents' && <Documents user={user} />}
             {currentView === 'calculator' && <Calculator />}
             {currentView === 'tasks' && <Tasks user={user} />}
             {currentView === 'buyers' && <Buyers user={user} />}
             {currentView === 'blast' && <Blast user={user} />}
+            {currentView === 'finder' && <PropertyFinder />}
+            {currentView === 'skiptrace' && <SkipTrace />}
+            {currentView === 'affiliates' && <Affiliates user={user} />}
+            {currentView === 'settings' && <Settings user={user} />}
             {currentView === 'admin' && isAdmin && <Admin user={user} />}
           </motion.div>
         </AnimatePresence>

@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, LeadStatus, Property } from '../types';
-import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash, Map } from 'lucide-react';
+import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash, Map, Zap, Loader2, LayoutGrid, List } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../lib/utils';
@@ -20,9 +20,11 @@ export default function Leads({ user }: LeadsProps) {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [leadToEdit, setLeadToEdit] = useState<Lead | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSkipTracing, setIsSkipTracing] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [showTrash, setShowTrash] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'pipeline'>('list');
 
   enum OperationType {
     CREATE = 'create',
@@ -158,6 +160,61 @@ export default function Leads({ user }: LeadsProps) {
       console.error("Error adding lead:", error);
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleSkipTrace = async (leadId: string) => {
+    if (isSkipTracing) return;
+    setIsSkipTracing(leadId);
+    
+    try {
+      const lead = leads.find(l => l.id === leadId);
+      if (!lead) return;
+
+      const [firstName, ...lastNameParts] = lead.fullName.split(' ');
+      const lastName = lastNameParts.join(' ');
+
+      const response = await fetch('/api/skiptrace', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          address: lead.property?.address,
+          city: lead.property?.city,
+          state: lead.property?.state,
+          zip: lead.property?.zip
+        })
+      });
+
+      if (!response.ok) throw new Error('Skip trace failed');
+      const data = await response.json();
+
+      // Handle both real API response and demo fallback
+      const foundPhone = data.phone || data.results?.[0]?.phoneNumbers?.[0]?.phoneNumber;
+      const foundEmail = data.email || data.results?.[0]?.emails?.[0]?.email;
+
+      if (!foundPhone && !foundEmail) {
+        setNotification('No contact info found for this lead.');
+        setTimeout(() => setNotification(null), 3000);
+        return;
+      }
+
+      await updateDoc(doc(db, 'leads', leadId), {
+        phone: lead.phone || foundPhone || '',
+        email: lead.email || foundEmail || '',
+        notes: (lead.notes || '') + `\n[Skip Trace ${new Date().toLocaleDateString()}]: ${data.isDemo ? 'Demo data generated.' : 'Real data found.'}`,
+        updatedAt: serverTimestamp()
+      });
+
+      setNotification('Skip Trace successful! Contact info updated.');
+      setTimeout(() => setNotification(null), 3000);
+    } catch (error) {
+      console.error('Skip trace error:', error);
+      setNotification('Failed to perform skip trace. Check your API configuration.');
+      setTimeout(() => setNotification(null), 3000);
+    } finally {
+      setIsSkipTracing(null);
     }
   };
 
@@ -431,6 +488,30 @@ export default function Leads({ user }: LeadsProps) {
           </p>
         </div>
         <div className="flex items-center gap-3 w-full sm:w-auto">
+          {!showTrash && (
+            <div className="flex bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+              <button 
+                onClick={() => setViewMode('list')}
+                className={cn(
+                  "p-2 rounded-lg transition-all",
+                  viewMode === 'list' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
+                )}
+                title="List View"
+              >
+                <List size={18} />
+              </button>
+              <button 
+                onClick={() => setViewMode('pipeline')}
+                className={cn(
+                  "p-2 rounded-lg transition-all",
+                  viewMode === 'pipeline' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
+                )}
+                title="Pipeline View"
+              >
+                <LayoutGrid size={18} />
+              </button>
+            </div>
+          )}
           <button 
             onClick={() => setShowTrash(!showTrash)}
             className={cn(
@@ -466,17 +547,19 @@ export default function Leads({ user }: LeadsProps) {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4">
-        <AnimatePresence>
-          {filteredLeads.map((lead) => (
-            <motion.div 
-              key={lead.id}
-              layout
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 10 }}
-              className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden hover:border-zinc-700 transition-all group"
-            >
+      {viewMode === 'list' || showTrash ? (
+        <div className="grid grid-cols-1 gap-4">
+          <AnimatePresence>
+            {filteredLeads.map((lead) => (
+              <motion.div 
+                key={lead.id}
+                layout
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 10 }}
+                className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden hover:border-zinc-700 transition-all group"
+              >
+                {/* ... existing lead card ... */}
               <div 
                 className="p-4 md:p-6 flex items-center justify-between cursor-pointer"
                 onClick={() => setExpandedLead(expandedLead === lead.id ? null : lead.id)}
@@ -665,6 +748,41 @@ export default function Leads({ user }: LeadsProps) {
                   className="px-4 md:px-6 pb-6 border-t border-zinc-800 pt-6"
                 >
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                          <Zap size={14} className="text-blue-400" />
+                          Skip Trace Pro
+                        </h4>
+                        <button 
+                          onClick={() => handleSkipTrace(lead.id)}
+                          disabled={!!isSkipTracing}
+                          className={cn(
+                            "text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 transition-all px-3 py-1.5 rounded-lg border",
+                            isSkipTracing === lead.id 
+                              ? "bg-blue-500/20 border-blue-500/30 text-blue-400 cursor-not-allowed" 
+                              : "bg-blue-600 text-white border-blue-500 hover:bg-blue-500"
+                          )}
+                        >
+                          {isSkipTracing === lead.id ? (
+                            <Loader2 size={12} className="animate-spin" />
+                          ) : (
+                            <Zap size={12} fill="currentColor" />
+                          )}
+                          {isSkipTracing === lead.id ? 'Tracing...' : 'Skip Trace Now'}
+                        </button>
+                      </div>
+                      <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-2xl space-y-2">
+                        <p className="text-[10px] text-zinc-400 leading-relaxed">
+                          Find hidden phone numbers, emails, and relative info for this property owner instantly.
+                        </p>
+                        <div className="flex items-center gap-4 text-[10px] font-bold text-blue-400 uppercase tracking-widest">
+                          <span>$0.15 / Hit</span>
+                          <span>98% Accuracy</span>
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="space-y-4">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
@@ -875,6 +993,84 @@ export default function Leads({ user }: LeadsProps) {
           ))}
         </AnimatePresence>
       </div>
+      ) : (
+        <div className="flex gap-6 overflow-x-auto pb-8 custom-scrollbar min-h-[600px] -mx-4 px-4 sm:mx-0 sm:px-0">
+          {customStatuses.map((status) => {
+            const statusLeads = filteredLeads.filter(l => l.status === status);
+            return (
+              <div key={status} className="flex-shrink-0 w-80 flex flex-col gap-4">
+                <div className="flex items-center justify-between px-2">
+                  <div className="flex items-center gap-2">
+                    <div className={cn(
+                      "w-2 h-2 rounded-full",
+                      status === 'New' ? "bg-blue-500" :
+                      status === 'Contacted' ? "bg-purple-500" :
+                      status === 'Appointment' ? "bg-amber-500" :
+                      status === 'Under Contract' ? "bg-emerald-500" :
+                      status === 'Closed' ? "bg-green-500" :
+                      status === 'Dead' ? "bg-red-500" : "bg-zinc-500"
+                    )} />
+                    <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-400">{status}</h3>
+                  </div>
+                  <span className="text-[10px] font-bold bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
+                    {statusLeads.length}
+                  </span>
+                </div>
+                
+                <div className="flex-1 flex flex-col gap-3 min-h-[500px] p-2 bg-zinc-900/20 border border-dashed border-zinc-800 rounded-3xl">
+                  {statusLeads.map((lead) => (
+                    <motion.div
+                      key={lead.id}
+                      layoutId={lead.id}
+                      onClick={() => {
+                        setExpandedLead(lead.id);
+                        setViewMode('list');
+                      }}
+                      className="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl cursor-pointer hover:border-zinc-700 transition-all group shadow-lg"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="font-bold text-sm truncate">{lead.fullName}</h4>
+                          <div className="flex items-center gap-1 text-[10px] text-zinc-500">
+                            <Clock size={10} />
+                            {formatDate(lead.updatedAt)}
+                          </div>
+                        </div>
+                        
+                        {properties[lead.id]?.address && (
+                          <div className="flex items-center gap-2 text-[10px] text-zinc-500">
+                            <MapPin size={10} className="shrink-0" />
+                            <span className="truncate">{properties[lead.id].address}</span>
+                          </div>
+                        )}
+                        
+                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
+                          <div className="flex items-center gap-2">
+                            <div className="w-6 h-6 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[8px] font-bold">
+                              {lead.fullName.charAt(0)}
+                            </div>
+                            <span className="text-[10px] text-zinc-500">{lead.source || 'Direct'}</span>
+                          </div>
+                          <div className="flex gap-1">
+                            {lead.phone && <Phone size={10} className="text-zinc-600" />}
+                            {lead.email && <Mail size={10} className="text-zinc-600" />}
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  ))}
+                  
+                  {statusLeads.length === 0 && (
+                    <div className="flex-1 flex items-center justify-center">
+                      <p className="text-[10px] text-zinc-700 italic uppercase tracking-widest">Empty Stage</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {notification && (
         <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-4">

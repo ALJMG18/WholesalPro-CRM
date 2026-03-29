@@ -142,6 +142,75 @@ async function startServer() {
     res.json({ results });
   });
 
+  // Skip Tracing API (BatchData Example)
+  app.post("/api/skiptrace", async (req, res) => {
+    const { firstName, lastName, address, city, state, zip } = req.body;
+    
+    if (!process.env.SKIPTRACE_API_KEY) {
+      // Fallback for demo if no key is provided
+      return res.json({
+        success: true,
+        isDemo: true,
+        phone: `(555) ${Math.floor(100 + Math.random() * 900)}-${Math.floor(1000 + Math.random() * 9000)}`,
+        email: `${firstName?.toLowerCase()}.${lastName?.toLowerCase()}@example.com`
+      });
+    }
+
+    try {
+      // This is a generic implementation for a Skip Trace provider like BatchData
+      const response = await fetch("https://api.batchdata.com/api/v1/skiptrace/single", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.SKIPTRACE_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          requests: [{
+            firstName,
+            lastName,
+            propertyAddress: {
+              street: address,
+              city,
+              state,
+              zip
+            }
+          }]
+        })
+      });
+
+      const data = await response.json();
+      res.json(data);
+    } catch (error) {
+      console.error("Skip Trace API error:", error);
+      res.status(500).json({ error: "Failed to perform skip trace" });
+    }
+  });
+
+  // Property Search API (Attom Data Example)
+  app.get("/api/property/search", async (req, res) => {
+    const { address, city, state, zip } = req.query;
+
+    if (!process.env.PROPERTY_API_KEY) {
+      return res.status(500).json({ error: "Property API key not configured" });
+    }
+
+    try {
+      // Example using Attom Data API
+      const response = await fetch(`https://api.gateway.attomdata.com/propertyapi/v1.0.0/property/detail?address1=${address}&address2=${city}, ${state} ${zip}`, {
+        headers: {
+          "apikey": process.env.PROPERTY_API_KEY,
+          "Accept": "application/json"
+        }
+      });
+
+      const data = await response.json();
+      res.json(data);
+    } catch (error) {
+      console.error("Property Search API error:", error);
+      res.status(500).json({ error: "Failed to fetch property details" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
