@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, LeadStatus, Property } from '../types';
-import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock } from 'lucide-react';
+import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../lib/utils';
@@ -17,6 +17,9 @@ export default function Leads({ user }: LeadsProps) {
   const [properties, setProperties] = useState<Record<string, Property>>({});
   const [customStatuses, setCustomStatuses] = useState<string[]>(['New', 'Contacted', 'Appointment', 'Under Contract', 'Closed', 'Dead']);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [notification, setNotification] = useState<string | null>(null);
   const [expandedLead, setExpandedLead] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [newStatusName, setNewStatusName] = useState('');
@@ -79,6 +82,8 @@ export default function Leads({ user }: LeadsProps) {
 
   const handleAddLead = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, 'leads'), {
         ...newLead,
@@ -90,6 +95,8 @@ export default function Leads({ user }: LeadsProps) {
       setNewLead({ fullName: '', phone: '', email: '', status: 'New', notes: '', source: '' });
     } catch (error) {
       console.error("Error adding lead:", error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -252,15 +259,41 @@ export default function Leads({ user }: LeadsProps) {
                 </div>
 
                 <div className="flex items-center gap-4">
-                  <button 
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if(confirm('Delete lead?')) deleteDoc(doc(db, 'leads', lead.id));
-                    }}
-                    className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
-                  >
-                    <Trash2 size={16} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {deleteConfirmId === lead.id ? (
+                      <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            deleteDoc(doc(db, 'leads', lead.id));
+                            setDeleteConfirmId(null);
+                          }}
+                          className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
+                        >
+                          Confirm
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDeleteConfirmId(null);
+                          }}
+                          className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeleteConfirmId(lead.id);
+                        }}
+                        className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    )}
+                  </div>
                   {expandedLead === lead.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                 </div>
               </div>
@@ -417,7 +450,8 @@ export default function Leads({ user }: LeadsProps) {
                           dueDate: serverTimestamp(),
                           createdAt: serverTimestamp()
                         });
-                        alert('Follow-up task created!');
+                        setNotification('Follow-up task created!');
+                        setTimeout(() => setNotification(null), 3000);
                       }}
                       className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-xl text-xs font-bold transition-all"
                     >
@@ -431,6 +465,15 @@ export default function Leads({ user }: LeadsProps) {
           ))}
         </AnimatePresence>
       </div>
+
+      {notification && (
+        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-4">
+          <div className="bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3">
+            <CheckSquare size={18} />
+            {notification}
+          </div>
+        </div>
+      )}
 
       {/* Add Lead Modal */}
       <AnimatePresence>
@@ -533,9 +576,20 @@ export default function Leads({ user }: LeadsProps) {
 
                 <button 
                   type="submit"
-                  className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all"
+                  disabled={isSubmitting}
+                  className={cn(
+                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
+                    isSubmitting && "opacity-50 cursor-not-allowed"
+                  )}
                 >
-                  Create Lead
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Lead"
+                  )}
                 </button>
               </form>
             </motion.div>

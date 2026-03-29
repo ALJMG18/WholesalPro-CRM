@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Task } from '../types';
-import { Plus, CheckCircle2, Circle, Clock, Trash2, Calendar } from 'lucide-react';
+import { Plus, CheckCircle2, Circle, Clock, Trash2, Calendar, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../lib/utils';
@@ -15,6 +15,8 @@ interface TasksProps {
 export default function Tasks({ user }: TasksProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     const q = query(
@@ -32,7 +34,8 @@ export default function Tasks({ user }: TasksProps) {
 
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTask.trim()) return;
+    if (!newTask.trim() || isSubmitting) return;
+    setIsSubmitting(true);
 
     try {
       await addDoc(collection(db, 'tasks'), {
@@ -46,6 +49,8 @@ export default function Tasks({ user }: TasksProps) {
       setNewTask('');
     } catch (error) {
       console.error("Error adding task:", error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -84,9 +89,17 @@ export default function Tasks({ user }: TasksProps) {
         />
         <button 
           type="submit"
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all"
+          disabled={isSubmitting}
+          className={cn(
+            "absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all",
+            isSubmitting && "opacity-50 cursor-not-allowed"
+          )}
         >
-          <Plus size={20} />
+          {isSubmitting ? (
+            <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+          ) : (
+            <Plus size={20} />
+          )}
         </button>
       </form>
 
@@ -129,12 +142,34 @@ export default function Tasks({ user }: TasksProps) {
                 </div>
               </div>
 
-              <button 
-                onClick={() => deleteTask(task.id)}
-                className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-500/10 rounded-lg text-zinc-500 hover:text-red-400 transition-all"
-              >
-                <Trash2 size={16} />
-              </button>
+              <div className="flex items-center gap-2">
+                {deleteConfirmId === task.id ? (
+                  <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                    <button 
+                      onClick={() => {
+                        deleteTask(task.id);
+                        setDeleteConfirmId(null);
+                      }}
+                      className="px-2 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
+                    >
+                      Confirm
+                    </button>
+                    <button 
+                      onClick={() => setDeleteConfirmId(null)}
+                      className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={() => setDeleteConfirmId(task.id)}
+                    className="opacity-0 group-hover:opacity-100 p-2 hover:bg-red-500/10 rounded-lg text-zinc-500 hover:text-red-400 transition-all"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
             </motion.div>
           ))}
         </AnimatePresence>

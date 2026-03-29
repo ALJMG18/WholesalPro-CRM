@@ -14,6 +14,8 @@ interface BuyersProps {
 export default function Buyers({ user }: BuyersProps) {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [newBuyer, setNewBuyer] = useState({
     fullName: '',
@@ -38,6 +40,8 @@ export default function Buyers({ user }: BuyersProps) {
 
   const handleAddBuyer = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
       await addDoc(collection(db, 'buyers'), {
         ...newBuyer,
@@ -48,6 +52,8 @@ export default function Buyers({ user }: BuyersProps) {
       setNewBuyer({ fullName: '', phone: '', email: '', buyCriteria: '', areas: '' });
     } catch (error) {
       console.error("Error adding buyer:", error);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -102,12 +108,34 @@ export default function Buyers({ user }: BuyersProps) {
                     {buyer.areas || 'All Areas'}
                   </div>
                 </div>
-                <button 
-                  onClick={() => deleteDoc(doc(db, 'buyers', buyer.id))}
-                  className="p-2 opacity-0 group-hover:opacity-100 hover:bg-red-500/10 rounded-lg text-zinc-400 hover:text-red-400 transition-all"
-                >
-                  <Trash2 size={14} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {deleteConfirmId === buyer.id ? (
+                    <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
+                      <button 
+                        onClick={() => {
+                          deleteDoc(doc(db, 'buyers', buyer.id));
+                          setDeleteConfirmId(null);
+                        }}
+                        className="px-2 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
+                      >
+                        Confirm
+                      </button>
+                      <button 
+                        onClick={() => setDeleteConfirmId(null)}
+                        className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => setDeleteConfirmId(buyer.id)}
+                      className="p-2 opacity-0 group-hover:opacity-100 hover:bg-red-500/10 rounded-lg text-zinc-400 hover:text-red-400 transition-all"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-3 text-sm text-zinc-400">
@@ -210,9 +238,20 @@ export default function Buyers({ user }: BuyersProps) {
 
                 <button 
                   type="submit"
-                  className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all"
+                  disabled={isSubmitting}
+                  className={cn(
+                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
+                    isSubmitting && "opacity-50 cursor-not-allowed"
+                  )}
                 >
-                  Create Buyer
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Buyer"
+                  )}
                 </button>
               </form>
             </motion.div>
