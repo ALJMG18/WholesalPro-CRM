@@ -1,4 +1,4 @@
-const CACHE_NAME = 'wholesalepro-v2';
+const CACHE_NAME = 'wholesalepro-v3';
 const ASSETS = [
   '/',
   '/index.html',
@@ -7,7 +7,7 @@ const ASSETS = [
 
 // Install event - cache assets
 self.addEventListener('install', (event) => {
-  self.skipWaiting(); // Force the waiting service worker to become the active service worker
+  self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
       return cache.addAll(ASSETS);

@@ -3,7 +3,7 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, LeadStatus, Property } from '../types';
-import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash } from 'lucide-react';
+import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash, Map } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../lib/utils';
@@ -72,6 +72,8 @@ export default function Leads({ user }: LeadsProps) {
       path
     };
     console.error('Firestore Error: ', JSON.stringify(errInfo));
+    setNotification(`Error: ${errInfo.error}`);
+    setTimeout(() => setNotification(null), 5000);
   };
   const [expandedLead, setExpandedLead] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -186,40 +188,34 @@ export default function Leads({ user }: LeadsProps) {
   const handleSyncField = async (collectionName: string, docId: string | null, leadId: string, field: string, value: any) => {
     try {
       if (collectionName === 'properties') {
+        // For properties, we now prefer handleSaveProperty for better reliability
+        // but keeping this for simple single-field updates if needed
         const existingProp = properties[leadId];
-        
-        // Calculate MAO if ARV or Repairs changed
-        let updatedValue = value;
-        let additionalFields: Record<string, any> = {};
+        let updates: Record<string, any> = { [field]: value };
         
         if (field === 'arv' || field === 'repairEstimate') {
-          const currentArv = field === 'arv' ? value : (existingProp?.arv || 0);
-          const currentRepairs = field === 'repairEstimate' ? value : (existingProp?.repairEstimate || 0);
-          const mao = (currentArv * 0.70) - currentRepairs;
-          additionalFields.mao = mao;
+          const currentArv = field === 'arv' ? Number(value) : (existingProp?.arv || 0);
+          const currentRepairs = field === 'repairEstimate' ? Number(value) : (existingProp?.repairEstimate || 0);
+          updates.mao = (currentArv * 0.70) - currentRepairs;
         }
 
         if (existingProp && existingProp.id) {
-          await updateDoc(doc(db, 'properties', existingProp.id), { 
-            [field]: updatedValue,
-            ...additionalFields 
-          });
-        } else if (!existingProp) {
-          // Check again if it was created while we were typing
+          await updateDoc(doc(db, 'properties', existingProp.id), updates);
+        } else {
           const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
           const snap = await getDocs(q);
           if (!snap.empty) {
-            await updateDoc(doc(db, 'properties', snap.docs[0].id), { 
-              [field]: updatedValue,
-              ...additionalFields 
-            });
+            await updateDoc(doc(db, 'properties', snap.docs[0].id), updates);
           } else {
             await addDoc(collection(db, 'properties'), {
               leadId,
-              address: '',
               ownerUid: user.uid,
-              [field]: updatedValue,
-              ...additionalFields
+              address: '',
+              arv: 0,
+              repairEstimate: 0,
+              askingPrice: 0,
+              mao: 0,
+              ...updates
             });
           }
         }
@@ -227,7 +223,6 @@ export default function Leads({ user }: LeadsProps) {
         await updateDoc(doc(db, 'leads', docId), { [field]: value });
       }
       
-      // Clear temp value after successful sync
       setTempValues(prev => {
         const next = { ...prev };
         delete next[`${collectionName}-${leadId}-${field}`];
@@ -235,6 +230,73 @@ export default function Leads({ user }: LeadsProps) {
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${docId || 'new'}`);
+    }
+  };
+
+  const handleSaveProperty = async (leadId: string) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const fields = ['address', 'arv', 'repairEstimate', 'askingPrice'];
+      const updates: Record<string, any> = {};
+      let hasChanges = false;
+      
+      fields.forEach(field => {
+        const tempKey = `properties-${leadId}-${field}`;
+        if (tempKey in tempValues) {
+          let val = tempValues[tempKey];
+          if (field !== 'address' && val !== '') val = Number(val);
+          updates[field] = val;
+          hasChanges = true;
+        }
+      });
+
+      if (!hasChanges) {
+        setNotification('No changes to save');
+        setTimeout(() => setNotification(null), 3000);
+        return;
+      }
+
+      const existingProp = properties[leadId];
+      
+      // Recalculate MAO
+      const currentArv = updates.arv !== undefined ? Number(updates.arv) : (existingProp?.arv || 0);
+      const currentRepairs = updates.repairEstimate !== undefined ? Number(updates.repairEstimate) : (existingProp?.repairEstimate || 0);
+      updates.mao = (currentArv * 0.70) - currentRepairs;
+
+      if (existingProp && existingProp.id) {
+        await updateDoc(doc(db, 'properties', existingProp.id), updates);
+      } else {
+        const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
+        const snap = await getDocs(q);
+        if (!snap.empty) {
+          await updateDoc(doc(db, 'properties', snap.docs[0].id), updates);
+        } else {
+          await addDoc(collection(db, 'properties'), {
+            leadId,
+            ownerUid: user.uid,
+            address: '',
+            arv: 0,
+            repairEstimate: 0,
+            askingPrice: 0,
+            mao: 0,
+            ...updates
+          });
+        }
+      }
+
+      setTempValues(prev => {
+        const next = { ...prev };
+        fields.forEach(field => delete next[`properties-${leadId}-${field}`]);
+        return next;
+      });
+
+      setNotification('Property details saved!');
+      setTimeout(() => setNotification(null), 3000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'properties');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -429,6 +491,12 @@ export default function Leads({ user }: LeadsProps) {
                       )}>
                         {lead.status}
                       </span>
+                      {properties[lead.id]?.address && (
+                        <div className="flex items-center gap-1 text-[10px] text-zinc-500 truncate max-w-[150px]">
+                          <MapPin size={10} className="shrink-0" />
+                          <span className="truncate">{properties[lead.id].address}</span>
+                        </div>
+                      )}
                       <div className="md:hidden flex items-center gap-2 text-[10px] text-zinc-500">
                         <Phone size={10} />
                         {lead.phone || 'N/A'}
@@ -445,6 +513,19 @@ export default function Leads({ user }: LeadsProps) {
                       <Mail size={14} />
                       {lead.email || 'N/A'}
                     </div>
+                    {properties[lead.id]?.address && (
+                      <a 
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(properties[lead.id].address)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => e.stopPropagation()}
+                        className="flex items-center gap-2 text-emerald-500 hover:text-emerald-400 transition-colors"
+                        title="View on Google Maps"
+                      >
+                        <Map size={14} />
+                        <span className="max-w-[150px] truncate">{properties[lead.id].address}</span>
+                      </a>
+                    )}
                   </div>
                 </div>
 
@@ -584,22 +665,52 @@ export default function Leads({ user }: LeadsProps) {
                   className="px-4 md:px-6 pb-6 border-t border-zinc-800 pt-6"
                 >
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div className="space-y-6">
-                      <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Home size={14} />
-                        Property Details
-                      </h4>
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
+                          <Home size={14} />
+                          Property Details
+                        </h4>
+                        <button 
+                          onClick={() => handleSaveProperty(lead.id)}
+                          disabled={isSubmitting}
+                          className={cn(
+                            "text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 transition-all",
+                            isSubmitting ? "text-zinc-600 cursor-not-allowed" : "text-emerald-500 hover:text-emerald-400"
+                          )}
+                        >
+                          {isSubmitting ? (
+                            <div className="w-3 h-3 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <CheckSquare size={12} />
+                          )}
+                          {isSubmitting ? 'Saving...' : 'Save Details'}
+                        </button>
+                      </div>
                       <div className="space-y-4">
                         <div>
                           <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Address</label>
-                          <input 
-                            type="text"
-                            className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                            value={getFieldValue('properties', lead.id, 'address', '')}
-                            onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-address`]: e.target.value }))}
-                            onBlur={(e) => handleSyncField('properties', null, lead.id, 'address', e.target.value)}
-                            placeholder="123 Main St, City, State"
-                          />
+                          <div className="flex gap-2">
+                            <input 
+                              type="text"
+                              className="flex-1 bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
+                              value={getFieldValue('properties', lead.id, 'address', '')}
+                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-address`]: e.target.value }))}
+                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'address', e.target.value)}
+                              placeholder="123 Main St, City, State"
+                            />
+                            {properties[lead.id]?.address && (
+                              <a 
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(properties[lead.id].address)}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-all flex items-center justify-center"
+                                title="View on Google Maps"
+                              >
+                                <Map size={16} />
+                              </a>
+                            )}
+                          </div>
                         </div>
                         <div className="grid grid-cols-3 gap-4">
                           <div>
@@ -637,7 +748,11 @@ export default function Leads({ user }: LeadsProps) {
                           <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-3 flex items-center justify-between">
                             <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Maximum Allowable Offer (MAO)</span>
                             <span className="text-lg font-bold text-emerald-400">
-                              ${(properties[lead.id]?.mao || 0).toLocaleString()}
+                              ${(() => {
+                                const arv = Number(getFieldValue('properties', lead.id, 'arv', 0));
+                                const repairs = Number(getFieldValue('properties', lead.id, 'repairEstimate', 0));
+                                return ((arv * 0.70) - repairs).toLocaleString();
+                              })()}
                             </span>
                           </div>
                           <p className="text-[8px] text-zinc-600 mt-1 italic text-center">Formula: (ARV * 70%) - Repairs</p>

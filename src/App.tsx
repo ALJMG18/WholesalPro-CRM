@@ -109,7 +109,7 @@ export default function App() {
           <h2 className="text-xl font-serif italic font-bold">WholesalePro</h2>
           <div className="flex items-center gap-1.5 text-[8px] text-zinc-500 uppercase tracking-widest">
             <div className="w-1 h-1 rounded-full bg-emerald-500 animate-pulse" />
-            Live
+            Live v2.2
           </div>
         </div>
         <button 
@@ -147,7 +147,7 @@ export default function App() {
                 <h2 className="text-2xl font-serif italic font-bold">WholesalePro</h2>
                 <div className="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-widest">
                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  Live System
+                  Live v2.2
                 </div>
               </div>
 
