@@ -857,6 +857,7 @@ export default function Leads({ user }: LeadsProps) {
                           leadId: lead.id,
                           ownerUid: user.uid,
                           dueDate: serverTimestamp(),
+                          notified: false,
                           createdAt: serverTimestamp()
                         });
                         setNotification('Follow-up task created!');

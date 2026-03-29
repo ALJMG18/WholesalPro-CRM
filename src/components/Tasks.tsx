@@ -3,8 +3,9 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Task } from '../types';
-import { Plus, CheckCircle2, Circle, Clock, Trash2, Calendar, X } from 'lucide-react';
+import { Plus, CheckCircle2, Circle, Clock, Trash2, Calendar, X, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { Timestamp } from 'firebase/firestore';
 
 import { cn } from '../lib/utils';
 
@@ -15,8 +16,57 @@ interface TasksProps {
 export default function Tasks({ user }: TasksProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [newTask, setNewTask] = useState('');
+  const [newDate, setNewDate] = useState(new Date().toISOString().split('T')[0]);
+  const [newTime, setNewTime] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+
+    const checkTasks = () => {
+      const now = new Date();
+      tasks.forEach(async (task) => {
+        if (!task.completed && !task.notified && task.dueDate) {
+          let taskDate: Date;
+          if (task.dueDate instanceof Timestamp) {
+            taskDate = task.dueDate.toDate();
+          } else if (task.dueDate?.seconds) {
+            taskDate = new Date(task.dueDate.seconds * 1000);
+          } else {
+            taskDate = new Date(task.dueDate);
+          }
+
+          if (task.dueTime) {
+            const [hours, minutes] = task.dueTime.split(':').map(Number);
+            taskDate.setHours(hours, minutes, 0, 0);
+          } else {
+            // If no time, default to start of day or just ignore time check
+            taskDate.setHours(0, 0, 0, 0);
+          }
+
+          if (now >= taskDate) {
+            if ("Notification" in window && Notification.permission === "granted") {
+              new Notification("WholesalePro Reminder", {
+                body: task.title,
+                icon: "/favicon.ico"
+              });
+            }
+            try {
+              await updateDoc(doc(db, 'tasks', task.id), { notified: true });
+            } catch (e) {
+              console.error("Error updating notified status", e);
+            }
+          }
+        }
+      });
+    };
+
+    const interval = setInterval(checkTasks, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [tasks]);
 
   useEffect(() => {
     const q = query(
@@ -38,15 +88,24 @@ export default function Tasks({ user }: TasksProps) {
     setIsSubmitting(true);
 
     try {
+      const taskDate = new Date(newDate);
+      // Ensure it's a valid date
+      if (isNaN(taskDate.getTime())) {
+        throw new Error("Invalid date");
+      }
+
       await addDoc(collection(db, 'tasks'), {
         title: newTask,
         completed: false,
-        leadId: 'general', // Simplified
+        leadId: 'general',
         ownerUid: user.uid,
-        dueDate: serverTimestamp(),
+        dueDate: Timestamp.fromDate(taskDate),
+        dueTime: newTime || null,
+        notified: false,
         createdAt: serverTimestamp()
       });
       setNewTask('');
+      setNewTime('');
     } catch (error) {
       console.error("Error adding task:", error);
     } finally {
@@ -79,28 +138,55 @@ export default function Tasks({ user }: TasksProps) {
         <p className="text-zinc-500 text-sm">Keep track of your follow-ups and deal deadlines</p>
       </div>
 
-      <form onSubmit={handleAddTask} className="relative">
-        <input 
-          type="text" 
-          placeholder="Add a new follow-up task..."
-          className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-6 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 transition-all"
-          value={newTask}
-          onChange={(e) => setNewTask(e.target.value)}
-        />
-        <button 
-          type="submit"
-          disabled={isSubmitting}
-          className={cn(
-            "absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all",
-            isSubmitting && "opacity-50 cursor-not-allowed"
-          )}
-        >
-          {isSubmitting ? (
-            <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-          ) : (
-            <Plus size={20} />
-          )}
-        </button>
+      <form onSubmit={handleAddTask} className="space-y-4">
+        <div className="relative">
+          <input 
+            type="text" 
+            placeholder="Add a new follow-up task..."
+            className="w-full bg-zinc-900 border border-zinc-800 rounded-2xl py-4 pl-6 pr-16 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 transition-all"
+            value={newTask}
+            onChange={(e) => setNewTask(e.target.value)}
+          />
+          <button 
+            type="submit"
+            disabled={isSubmitting}
+            className={cn(
+              "absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-white text-black rounded-xl hover:bg-zinc-200 transition-all",
+              isSubmitting && "opacity-50 cursor-not-allowed"
+            )}
+          >
+            {isSubmitting ? (
+              <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+            ) : (
+              <Plus size={20} />
+            )}
+          </button>
+        </div>
+        
+        <div className="flex flex-wrap gap-3">
+          <div className="flex-1 min-w-[150px] relative">
+            <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
+            <input 
+              type="date"
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 pl-10 pr-4 text-xs focus:outline-none focus:ring-1 focus:ring-white/20"
+              value={newDate}
+              onChange={(e) => setNewDate(e.target.value)}
+            />
+          </div>
+          <div className="flex-1 min-w-[120px] relative">
+            <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
+            <input 
+              type="time"
+              className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 pl-10 pr-4 text-xs focus:outline-none focus:ring-1 focus:ring-white/20"
+              value={newTime}
+              onChange={(e) => setNewTime(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2 px-3 py-2 bg-zinc-900/50 border border-zinc-800 rounded-xl text-[10px] text-zinc-500 uppercase tracking-wider">
+            <Bell size={12} className={cn(Notification.permission === 'granted' ? "text-emerald-500" : "text-zinc-600")} />
+            {Notification.permission === 'granted' ? 'Alerts On' : 'Alerts Off'}
+          </div>
+        </div>
       </form>
 
       <div className="space-y-3">
@@ -138,7 +224,20 @@ export default function Tasks({ user }: TasksProps) {
                 </p>
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider mt-1 opacity-60">
                   <Calendar size={10} />
-                  <span>Today</span>
+                  <span>
+                    {task.dueDate ? (
+                      task.dueDate instanceof Timestamp 
+                        ? task.dueDate.toDate().toLocaleDateString() 
+                        : new Date(task.dueDate?.seconds ? task.dueDate.seconds * 1000 : task.dueDate).toLocaleDateString()
+                    ) : 'No date'}
+                    {task.dueTime && ` at ${task.dueTime}`}
+                  </span>
+                  {task.dueTime && !task.completed && (
+                    <div className="flex items-center gap-1 ml-2 text-emerald-500">
+                      <Bell size={10} />
+                      <span>Reminder Set</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

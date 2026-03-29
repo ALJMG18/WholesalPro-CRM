@@ -45,8 +45,10 @@ export interface Task {
   leadId: string;
   title: string;
   dueDate: any;
+  dueTime?: string; // HH:mm format
   completed: boolean;
   ownerUid: string;
+  notified?: boolean;
 }
 
 export interface Buyer {
@@ -56,5 +58,14 @@ export interface Buyer {
   email: string;
   buyCriteria: string;
   areas: string;
+  ownerUid: string;
+}
+
+export interface Template {
+  id: string;
+  name: string;
+  type: 'email' | 'sms';
+  subject?: string;
+  body: string;
   ownerUid: string;
 }

@@ -14,7 +14,9 @@ import {
   DollarSign,
   Clock,
   ChevronRight,
-  X
+  X,
+  Send,
+  ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -28,8 +30,11 @@ import Leads from './components/Leads';
 import Calculator from './components/Calculator';
 import Tasks from './components/Tasks';
 import Buyers from './components/Buyers';
+import Blast from './components/Blast';
+import Login from './components/Login';
+import Admin from './components/Admin';
 
-type View = 'dashboard' | 'leads' | 'calculator' | 'tasks' | 'buyers';
+type View = 'dashboard' | 'leads' | 'calculator' | 'tasks' | 'buyers' | 'blast' | 'admin';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -60,38 +65,10 @@ export default function App() {
   }
 
   if (!user) {
-    return (
-      <div className="h-screen w-screen flex flex-col items-center justify-center bg-[#0a0a0a] text-white p-6">
-        <motion.div 
-          initial={{ y: 20, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          className="max-w-md w-full text-center space-y-8"
-        >
-          <div className="space-y-2">
-            <h1 className="text-5xl font-bold tracking-tighter italic font-serif">WholesalePro</h1>
-            <p className="text-zinc-500 text-sm uppercase tracking-[0.2em]">Real Estate Wholesaling CRM</p>
-          </div>
-          
-          <div className="p-8 border border-zinc-800 rounded-2xl bg-zinc-900/50 backdrop-blur-xl space-y-6">
-            <p className="text-zinc-400 text-sm leading-relaxed">
-              Manage your leads, analyze deals, and close more contracts with our specialized wholesaling workflow.
-            </p>
-            <button 
-              onClick={signIn}
-              className="w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-colors flex items-center justify-center gap-3"
-            >
-              <DollarSign size={20} />
-              Sign in with Google
-            </button>
-          </div>
-          
-          <p className="text-[10px] text-zinc-600 uppercase tracking-widest">
-            Secure • Professional • Data-Driven
-          </p>
-        </motion.div>
-      </div>
-    );
+    return <Login />;
   }
+
+  const isAdmin = user?.email === 'emmanueltorresconcha@gmail.com';
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -99,7 +76,12 @@ export default function App() {
     { id: 'calculator', label: 'Deal Calc', icon: CalcIcon },
     { id: 'tasks', label: 'Tasks', icon: CheckSquare },
     { id: 'buyers', label: 'Buyers', icon: Building2 },
+    { id: 'blast', label: 'Blast', icon: Send },
   ];
+
+  if (isAdmin) {
+    navItems.push({ id: 'admin', label: 'Admin', icon: ShieldAlert });
+  }
 
   return (
     <div className="h-screen flex flex-col lg:flex-row bg-[#0a0a0a] text-zinc-100 overflow-hidden">
@@ -212,6 +194,8 @@ export default function App() {
             {currentView === 'calculator' && <Calculator />}
             {currentView === 'tasks' && <Tasks user={user} />}
             {currentView === 'buyers' && <Buyers user={user} />}
+            {currentView === 'blast' && <Blast user={user} />}
+            {currentView === 'admin' && isAdmin && <Admin user={user} />}
           </motion.div>
         </AnimatePresence>
       </main>

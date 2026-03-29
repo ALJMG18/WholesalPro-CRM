@@ -73,7 +73,9 @@
         "leadId": { "type": "string" },
         "title": { "type": "string" },
         "dueDate": { "type": "string", "format": "date-time" },
+        "dueTime": { "type": "string", "description": "HH:mm format" },
         "completed": { "type": "boolean" },
+        "notified": { "type": "boolean" },
         "ownerUid": { "type": "string" }
       },
       "required": ["title", "leadId", "ownerUid"]
@@ -92,9 +94,42 @@
         "ownerUid": { "type": "string" }
       },
       "required": ["fullName", "ownerUid"]
+    },
+    "Template": {
+      "title": "Template",
+      "description": "Marketing message templates for Email/SMS blasts.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["email", "sms"] },
+        "subject": { "type": "string" },
+        "body": { "type": "string" },
+        "ownerUid": { "type": "string" }
+      },
+      "required": ["name", "type", "body", "ownerUid"]
+    },
+    "User": {
+      "title": "User",
+      "description": "A registered user of the platform.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLogin": { "type": "string", "format": "date-time" },
+        "role": { "type": "string", "enum": ["admin", "client"] }
+      },
+      "required": ["email", "displayName", "createdAt", "role"]
     }
   },
   "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Collection of registered users."
+    },
     "leads": {
       "schema": "Lead",
       "description": "Collection of seller leads."
@@ -110,6 +145,10 @@
     "buyers": {
       "schema": "Buyer",
       "description": "Collection of cash buyers."
+    },
+    "templates": {
+      "schema": "Template",
+      "description": "Collection of marketing templates."
     }
   }
 }
