@@ -32,7 +32,7 @@ export default function Login() {
       if (isRegistering) {
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
-        const name = displayName || email.split('@')[0];
+        const name = displayName || email.split('@')?.[0] || 'User';
         
         await updateProfile(user, {
           displayName: name
@@ -63,7 +63,7 @@ export default function Login() {
         if (!userDoc.exists()) {
           await setDoc(doc(db, 'users', user.uid), {
             email: user.email,
-            displayName: user.displayName || user.email?.split('@')[0],
+            displayName: user.displayName || user.email?.split('@')?.[0] || 'User',
             photoURL: user.photoURL || null,
             createdAt: serverTimestamp(),
             lastLogin: serverTimestamp(),

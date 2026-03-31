@@ -15,6 +15,9 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "ownerUid": { "type": "string" },
+        "sequenceId": { "type": "string" },
+        "currentStepIndex": { "type": "number" },
+        "lastStepRunAt": { "type": "string", "format": "date-time" },
         "statusHistory": {
           "type": "array",
           "items": {
@@ -109,6 +112,21 @@
       },
       "required": ["name", "type", "body", "ownerUid"]
     },
+    "Activity": {
+      "title": "Activity",
+      "description": "A log of user actions within the platform.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "leadId": { "type": "string" },
+        "leadName": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["type", "description", "ownerUid", "createdAt"]
+    },
     "User": {
       "title": "User",
       "description": "A registered user of the platform.",
@@ -123,6 +141,30 @@
         "role": { "type": "string", "enum": ["admin", "client"] }
       },
       "required": ["email", "displayName", "createdAt", "role"]
+    },
+    "Sequence": {
+      "title": "Sequence",
+      "description": "A series of automated marketing steps.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "day": { "type": "number", "description": "Day after joining sequence" },
+              "type": { "type": "string", "enum": ["email", "sms"] },
+              "templateId": { "type": "string" },
+              "subject": { "type": "string" },
+              "body": { "type": "string" }
+            }
+          }
+        }
+      },
+      "required": ["name", "ownerUid", "steps"]
     }
   },
   "firestore": {
@@ -149,6 +191,14 @@
     "templates": {
       "schema": "Template",
       "description": "Collection of marketing templates."
+    },
+    "activities": {
+      "schema": "Activity",
+      "description": "Collection of user activity logs."
+    },
+    "sequences": {
+      "schema": "Sequence",
+      "description": "Collection of automated marketing sequences."
     }
   }
 }

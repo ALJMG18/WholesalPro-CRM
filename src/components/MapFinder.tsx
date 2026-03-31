@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { Phone, Mail, User, Home, Zap, DollarSign, MapPin, Search } from 'lucide-react';
+import { Phone, Mail, User, Home, Zap, DollarSign, MapPin, Search, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { User as FirebaseUser } from 'firebase/auth';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
+import { toast } from 'sonner';
+import { logActivity } from '../services/activityService';
+import { ActivityType } from '../types';
 
 // Fix for default marker icons in Leaflet with React
 // Using CDN URLs to avoid build issues with local image imports
@@ -43,11 +49,16 @@ const MOCK_PROPERTIES: Property[] = [
   { id: '5', address: '202 Meridian Ave', city: 'Miami', state: 'FL', zip: '33139', price: 410000, beds: 2, baths: 1, sqft: 1200, lat: 25.7810, lng: -80.1350, status: 'available' },
 ];
 
-export default function MapFinder() {
+interface MapFinderProps {
+  user: FirebaseUser;
+}
+
+export default function MapFinder({ user }: MapFinderProps) {
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
   const [isSkipping, setIsSkipping] = useState(false);
   const [skipResult, setSkipResult] = useState<{ phone: string; email: string; owner: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
 
   const handleSkipTrace = async (property: Property) => {
     setIsSkipping(true);
@@ -62,6 +73,40 @@ export default function MapFinder() {
       email: 'john.doe@example.com'
     });
     setIsSkipping(false);
+  };
+
+  const handleAddToLeads = async () => {
+    if (!selectedProperty || !skipResult || isAdding) return;
+    setIsAdding(true);
+    try {
+      await addDoc(collection(db, 'leads'), {
+        fullName: skipResult.owner,
+        address: selectedProperty.address,
+        city: selectedProperty.city,
+        state: selectedProperty.state,
+        zip: selectedProperty.zip,
+        phone: skipResult.phone,
+        email: skipResult.email,
+        status: 'new',
+        ownerUid: user.uid,
+        score: 75,
+        isHot: true,
+        propertyDetails: {
+          equity: 'Unknown',
+          occupancy: 'unknown',
+          motivation: 'medium'
+        },
+        createdAt: serverTimestamp()
+      });
+
+      await logActivity(user.uid, ActivityType.LEAD_CREATED, `Added lead from Map Search: ${selectedProperty.address}`);
+      toast.success('Lead added successfully!');
+    } catch (error) {
+      console.error('Error adding lead:', error);
+      toast.error('Failed to add lead');
+    } finally {
+      setIsAdding(false);
+    }
   };
 
   return (
@@ -85,7 +130,7 @@ export default function MapFinder() {
       </div>
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0">
-        <div className="lg:col-span-3 bg-zinc-900/30 border border-zinc-800 rounded-3xl overflow-hidden relative z-0">
+        <div className="lg:col-span-3 bg-zinc-950 border border-zinc-800 rounded-3xl overflow-hidden relative z-0 shadow-2xl">
           <MapContainer 
             center={[25.7825, -80.1299]} 
             zoom={13} 
@@ -93,9 +138,8 @@ export default function MapFinder() {
             className="z-0"
           >
             <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              className="map-tiles"
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+              url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
             />
             {MOCK_PROPERTIES.map(prop => (
               <Marker 
@@ -217,8 +261,12 @@ export default function MapFinder() {
                         <span className="truncate">{skipResult.email}</span>
                       </div>
                     </div>
-                    <button className="w-full bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold py-2 rounded-xl transition-all">
-                      Add to Leads
+                    <button 
+                      onClick={handleAddToLeads}
+                      disabled={isAdding}
+                      className="w-full bg-zinc-800 hover:bg-zinc-700 text-white text-xs font-bold py-2 rounded-xl transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isAdding ? <Loader2 size={14} className="animate-spin" /> : 'Add to Leads'}
                     </button>
                   </motion.div>
                 )}
@@ -241,9 +289,6 @@ export default function MapFinder() {
       <style>{`
         .leaflet-container {
           background: #0a0a0a !important;
-        }
-        .map-tiles {
-          filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
         }
         .leaflet-popup-content-wrapper {
           background: white !important;

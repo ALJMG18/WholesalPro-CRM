@@ -3,9 +3,10 @@ import { User } from 'firebase/auth';
 import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { Lead, Property } from '../types';
-import { FileText, Download, Printer, ChevronRight, User as UserIcon, MapPin, DollarSign, Calendar, CheckCircle2 } from 'lucide-react';
+import { FileText, Download, Printer, ChevronRight, User as UserIcon, MapPin, DollarSign, Calendar, CheckCircle2, PenTool } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import SignaturePad from './SignaturePad';
 
 interface DocumentsProps {
   user: User;
@@ -36,7 +37,7 @@ This Agreement is made this {{DATE}} by and between {{OWNER_NAME}} ("Seller") an
 
 4. INSPECTION: Buyer shall have {{INSPECTION_DAYS}} days to inspect the property.
 
-SELLER: ____________________    BUYER: ____________________
+SELLER: {{SELLER_SIG}}    BUYER: {{BUYER_SIG}}
 `
   },
   {
@@ -56,7 +57,7 @@ WHEREAS, Assignor entered into a Purchase and Sale Agreement with {{OWNER_NAME}}
 
 3. TOTAL PRICE: Assignee agrees to pay the original purchase price of {{PRICE}} plus the assignment fee.
 
-ASSIGNOR: ____________________    ASSIGNEE: ____________________
+ASSIGNOR: {{ASSIGNOR_SIG}}    ASSIGNEE: {{ASSIGNEE_SIG}}
 `
   }
 ];
@@ -66,9 +67,11 @@ export default function Documents({ user }: DocumentsProps) {
   const [properties, setProperties] = useState<Record<string, Property>>({});
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
-  const [previewContent, setPreviewContent] = useState('');
+  const [previewContent, setPreviewContent] = useState<any[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
+  const [showSignaturePad, setShowSignaturePad] = useState(false);
+  const [signature, setSignature] = useState<string | null>(null);
 
   useEffect(() => {
     const qLeads = query(collection(db, 'leads'), where('ownerUid', '==', user.uid));
@@ -97,7 +100,7 @@ export default function Documents({ user }: DocumentsProps) {
       const prop = properties[selectedLead.id];
       let content = selectedTemplate.content;
       
-      const replacements: Record<string, string> = {
+      const replacements: Record<string, any> = {
         '{{DATE}}': new Date().toLocaleDateString(),
         '{{OWNER_NAME}}': selectedLead.fullName,
         '{{MY_NAME}}': user.displayName || 'WholesalePro User',
@@ -107,16 +110,25 @@ export default function Documents({ user }: DocumentsProps) {
         '{{INSPECTION_DAYS}}': '10',
         '{{BUYER_NAME}}': '[END BUYER NAME]',
         '{{CONTRACT_DATE}}': new Date().toLocaleDateString(),
-        '{{ASSIGNMENT_FEE}}': '$5,000.00'
+        '{{ASSIGNMENT_FEE}}': '$5,000.00',
+        '{{SELLER_SIG}}': '____________________',
+        '{{BUYER_SIG}}': signature ? <img src={signature} alt="Buyer Signature" className="inline-block h-12 border-b border-black" /> : '____________________',
+        '{{ASSIGNOR_SIG}}': signature ? <img src={signature} alt="Assignor Signature" className="inline-block h-12 border-b border-black" /> : '____________________',
+        '{{ASSIGNEE_SIG}}': '____________________'
       };
 
-      Object.entries(replacements).forEach(([key, value]) => {
-        content = content.replace(new RegExp(key, 'g'), value);
+      // Split content by placeholders and replace them with elements or text
+      const parts = content.split(/(\{\{[A-Z_]+\}\})/g);
+      const renderedContent = parts.map((part, index) => {
+        if (replacements[part]) {
+          return <span key={index}>{replacements[part]}</span>;
+        }
+        return part;
       });
 
-      setPreviewContent(content);
+      setPreviewContent(renderedContent);
     }
-  }, [selectedLead, selectedTemplate, properties, user.displayName]);
+  }, [selectedLead, selectedTemplate, properties, user.displayName, signature]);
 
   const handleGenerate = () => {
     setIsGenerating(true);
@@ -125,7 +137,6 @@ export default function Documents({ user }: DocumentsProps) {
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 3000);
       
-      // In a real app, this would trigger a PDF generation or a print dialog
       window.print();
     }, 1500);
   };
@@ -207,6 +218,13 @@ export default function Documents({ user }: DocumentsProps) {
               {selectedLead && selectedTemplate && (
                 <div className="flex gap-2">
                   <button 
+                    onClick={() => setShowSignaturePad(true)}
+                    className="bg-zinc-800 text-white px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-zinc-700 transition-all"
+                  >
+                    <PenTool size={14} />
+                    {signature ? 'Change Signature' : 'Sign Document'}
+                  </button>
+                  <button 
                     onClick={handleGenerate}
                     disabled={isGenerating}
                     className="bg-white text-black px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 hover:bg-zinc-200 transition-all disabled:opacity-50"
@@ -236,6 +254,18 @@ export default function Documents({ user }: DocumentsProps) {
           </div>
         </div>
       </div>
+
+      <AnimatePresence>
+        {showSignaturePad && (
+          <SignaturePad 
+            onSave={(dataUrl) => {
+              setSignature(dataUrl);
+              setShowSignaturePad(false);
+            }}
+            onClose={() => setShowSignaturePad(false)}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {showSuccess && (

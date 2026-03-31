@@ -6,11 +6,25 @@ import { google } from "googleapis";
 import twilio from "twilio";
 import dotenv from "dotenv";
 import cors from "cors";
+import Stripe from "stripe";
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+let stripeClient: Stripe | null = null;
+
+export function getStripe(): Stripe {
+  if (!stripeClient) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      throw new Error("STRIPE_SECRET_KEY environment variable is required");
+    }
+    stripeClient = new Stripe(key);
+  }
+  return stripeClient;
+}
 
 async function startServer() {
   const app = express();
@@ -18,6 +32,40 @@ async function startServer() {
 
   app.use(cors());
   app.use(express.json());
+
+  // Stripe Checkout Session
+  app.post("/api/create-checkout-session", async (req, res) => {
+    const { priceId, userId, userEmail } = req.body;
+
+    if (!priceId) {
+      return res.status(400).json({ error: "Price ID is required" });
+    }
+
+    try {
+      const stripe = getStripe();
+      const session = await stripe.checkout.sessions.create({
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price: priceId,
+            quantity: 1,
+          },
+        ],
+        mode: "subscription",
+        success_url: `${process.env.APP_URL}/?session_id={CHECKOUT_SESSION_ID}&success=true`,
+        cancel_url: `${process.env.APP_URL}/?success=false`,
+        customer_email: userEmail,
+        metadata: {
+          userId: userId,
+        },
+      });
+
+      res.json({ id: session.id, url: session.url });
+    } catch (error) {
+      console.error("Stripe checkout error:", error);
+      res.status(500).json({ error: "Failed to create checkout session" });
+    }
+  });
 
   // Gmail OAuth Setup
   const oauth2Client = new google.auth.OAuth2(
@@ -209,6 +257,80 @@ async function startServer() {
       console.error("Property Search API error:", error);
       res.status(500).json({ error: "Failed to fetch property details" });
     }
+  });
+
+  // Automation Processing
+  app.post("/api/automations/process", async (req, res) => {
+    const { leads, sequences, gmailTokens } = req.body;
+    
+    if (!leads || !sequences) {
+      return res.status(400).json({ error: "Missing data" });
+    }
+
+    const results = [];
+    const now = new Date();
+
+    for (const lead of leads) {
+      if (!lead.sequenceId) continue;
+
+      const sequence = sequences.find((s: any) => s.id === lead.sequenceId);
+      if (!sequence) continue;
+
+      const currentStepIndex = lead.currentStepIndex ?? -1;
+      const nextStepIndex = currentStepIndex + 1;
+
+      if (nextStepIndex >= sequence.steps.length) continue;
+
+      const nextStep = sequence.steps[nextStepIndex];
+      const createdAt = new Date(lead.createdAt);
+      const daysSinceCreated = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24));
+
+      if (daysSinceCreated >= nextStep.day) {
+        // Execute step
+        try {
+          if (nextStep.type === "email" && gmailTokens) {
+            oauth2Client.setCredentials(gmailTokens);
+            const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+            const subject = nextStep.subject || "Follow up";
+            const body = nextStep.body;
+            const utf8Subject = `=?utf-8?B?${Buffer.from(subject).toString('base64')}?=`;
+            const messageParts = [
+              `To: ${lead.email}`,
+              'Content-Type: text/html; charset=utf-8',
+              'MIME-Version: 1.0',
+              `Subject: ${utf8Subject}`,
+              '',
+              body,
+            ];
+            const message = messageParts.join('\n');
+            const encodedMessage = Buffer.from(message)
+              .toString('base64')
+              .replace(/\+/g, '-')
+              .replace(/\//g, '_')
+              .replace(/=+$/, '');
+
+            await gmail.users.messages.send({
+              userId: "me",
+              requestBody: { raw: encodedMessage }
+            });
+            results.push({ leadId: lead.id, step: nextStepIndex, status: "sent_email" });
+          } else if (nextStep.type === "sms" && process.env.TWILIO_ACCOUNT_SID) {
+            const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+            await client.messages.create({
+              body: nextStep.body,
+              from: process.env.TWILIO_PHONE_NUMBER,
+              to: lead.phone
+            });
+            results.push({ leadId: lead.id, step: nextStepIndex, status: "sent_sms" });
+          }
+        } catch (err) {
+          console.error(`Automation failed for lead ${lead.id}:`, err);
+          results.push({ leadId: lead.id, step: nextStepIndex, status: "failed", error: err.message });
+        }
+      }
+    }
+
+    res.json({ results });
   });
 
   // Vite middleware for development

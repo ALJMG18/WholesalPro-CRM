@@ -1,1296 +1,619 @@
 import React, { useState, useEffect } from 'react';
-import { User } from 'firebase/auth';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, updateDoc, doc, deleteDoc, getDocs, arrayUnion } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Lead, LeadStatus, Property } from '../types';
-import { Plus, Search, MoreVertical, Phone, Mail, MapPin, Trash2, Edit2, X, ChevronDown, ChevronUp, Home, Hammer, DollarSign, Clock, CheckSquare, RotateCcw, Trash, Map, Zap, Loader2, LayoutGrid, List } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { User as FirebaseUser } from 'firebase/auth';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, serverTimestamp, orderBy } from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { Lead, LeadSource, LeadStatus, ActivityType, Property } from '../types';
+import { logActivity } from '../services/activityService';
+import { LeadList } from './LeadList';
+import { LeadForm } from './LeadForm';
+import { CSVImporter } from './CSVImporter';
 
-import { cn } from '../lib/utils';
-
-interface LeadsProps {
-  user: User;
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
 }
 
-export default function Leads({ user }: LeadsProps) {
+const handleFirestoreError = (error: any, operationType: OperationType, path: string | null) => {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error Details:', JSON.stringify(errInfo, null, 2));
+  return errInfo;
+};
+
+const calculateLeadScore = (lead: Partial<Lead>) => {
+  let score = 0;
+  if (lead.propertyDetails?.equity === 'High') score += 40;
+  if (lead.propertyDetails?.occupancy === 'Vacant') score += 40;
+  if (lead.propertyDetails?.motivation) score += 20;
+  
+  return {
+    score,
+    isHot: score >= 80
+  };
+};
+import { Map as MapIcon, List, Plus, Upload, Search, Filter, Download, MapPin, Trash2, RotateCcw } from 'lucide-react';
+import { MapContainer, TileLayer, Marker, Popup, useMap } from 'react-leaflet';
+import L from 'leaflet';
+import { cn } from '../lib/utils';
+import { motion } from 'motion/react';
+import { geocodeAddress } from '../lib/geocoding';
+import { toast } from 'sonner';
+
+// Component to handle map center updates
+const RecenterMap: React.FC<{ center: [number, number] }> = ({ center }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.flyTo(center, 14, {
+      duration: 1.5
+    });
+  }, [center, map]);
+  return null;
+};
+
+// Fix for default marker icons in Leaflet with React
+const DefaultIcon = L.icon({
+  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
+  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
+  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconSize: [25, 41],
+  iconAnchor: [12, 41],
+  popupAnchor: [1, -34],
+  shadowSize: [41, 41]
+});
+
+if (L.Marker.prototype.options) {
+  L.Marker.prototype.options.icon = DefaultIcon;
+}
+
+interface LeadsProps {
+  user: FirebaseUser | null;
+}
+
+const Leads: React.FC<LeadsProps> = ({ user }) => {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [properties, setProperties] = useState<Record<string, Property>>({});
-  const [customStatuses, setCustomStatuses] = useState<string[]>(['New', 'Contacted', 'Appointment', 'Under Contract', 'Closed', 'Dead']);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [leadToEdit, setLeadToEdit] = useState<Lead | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isSkipTracing, setIsSkipTracing] = useState<string | null>(null);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
-  const [notification, setNotification] = useState<string | null>(null);
-  const [showTrash, setShowTrash] = useState(false);
-  const [viewMode, setViewMode] = useState<'list' | 'pipeline'>('list');
-
-  enum OperationType {
-    CREATE = 'create',
-    UPDATE = 'update',
-    DELETE = 'delete',
-    LIST = 'list',
-    GET = 'get',
-    WRITE = 'write',
-  }
-
-  interface FirestoreErrorInfo {
-    error: string;
-    operationType: OperationType;
-    path: string | null;
-    authInfo: {
-      userId: string | undefined;
-      email: string | null | undefined;
-      emailVerified: boolean | undefined;
-      isAnonymous: boolean | undefined;
-      tenantId: string | null | undefined;
-      providerInfo: {
-        providerId: string;
-        displayName: string | null;
-        email: string | null;
-        photoUrl: string | null;
-      }[];
-    }
-  }
-
-  const handleFirestoreError = (error: unknown, operationType: OperationType, path: string | null) => {
-    const errInfo: FirestoreErrorInfo = {
-      error: error instanceof Error ? error.message : String(error),
-      authInfo: {
-        userId: user?.uid,
-        email: user?.email,
-        emailVerified: user?.emailVerified,
-        isAnonymous: user?.isAnonymous,
-        tenantId: user?.tenantId,
-        providerInfo: user?.providerData.map(provider => ({
-          providerId: provider.providerId,
-          displayName: provider.displayName,
-          email: provider.email,
-          photoUrl: provider.photoURL
-        })) || []
-      },
-      operationType,
-      path
-    };
-    console.error('Firestore Error: ', JSON.stringify(errInfo));
-    setNotification(`Error: ${errInfo.error}`);
-    setTimeout(() => setNotification(null), 5000);
-  };
-  const [expandedLead, setExpandedLead] = useState<string | null>(null);
+  const [sequences, setSequences] = useState<any[]>([]);
+  const [isFormOpen, setIsFormOpen] = useState(false);
+  const [isImporterOpen, setIsImporterOpen] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | undefined>(undefined);
   const [searchTerm, setSearchTerm] = useState('');
-  const [newStatusName, setNewStatusName] = useState('');
-  const [statusNote, setStatusNote] = useState('');
-  const [newLead, setNewLead] = useState({
-    fullName: '',
-    phone: '',
-    email: '',
-    status: 'New' as LeadStatus,
-    notes: '',
-    source: ''
-  });
+  const [filterStatus, setFilterStatus] = useState<LeadStatus | 'All'>('All');
+  const [view, setView] = useState<'list' | 'map'>('list');
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [mapStyle, setMapStyle] = useState<'dark' | 'street'>('dark');
 
   useEffect(() => {
-    const q = query(
-      collection(db, 'settings'),
-      where('ownerUid', '==', user.uid),
-      where('type', '==', 'lead_statuses')
-    );
+    if (!user) return;
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      if (!snapshot.empty) {
-        const data = snapshot.docs[0].data();
-        setCustomStatuses(data.values || []);
-      }
-    });
-
-    return () => unsubscribe();
-  }, [user.uid]);
-
-  useEffect(() => {
     const q = query(
       collection(db, 'leads'),
       where('ownerUid', '==', user.uid)
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead)));
+      const leadsData = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      } as Lead));
+      
+      // Sort in memory to handle missing createdAt fields
+      leadsData.sort((a, b) => {
+        const dateA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : new Date(a.createdAt || 0).getTime();
+        const dateB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : new Date(b.createdAt || 0).getTime();
+        return dateB - dateA;
+      });
+      
+      setLeads(leadsData);
+    }, (error) => {
+      const errInfo = handleFirestoreError(error, OperationType.LIST, 'leads');
+      toast.error('Error de conexión: ' + errInfo.error);
     });
 
-    return () => unsubscribe();
-  }, [user.uid]);
-
-  useEffect(() => {
-    const q = query(
+    const qProps = query(
       collection(db, 'properties'),
       where('ownerUid', '==', user.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeProps = onSnapshot(qProps, (snapshot) => {
       const props: Record<string, Property> = {};
       snapshot.docs.forEach(doc => {
         const data = doc.data() as Property;
         props[data.leadId] = { id: doc.id, ...data };
       });
       setProperties(props);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'properties');
     });
 
-    return () => unsubscribe();
-  }, [user.uid]);
+    const qSeqs = query(
+      collection(db, 'sequences'),
+      where('ownerUid', '==', user.uid)
+    );
 
-  const handleAddLead = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+    const unsubscribeSeqs = onSnapshot(qSeqs, (snapshot) => {
+      setSequences(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeProps();
+      unsubscribeSeqs();
+    };
+  }, [user]);
+
+  const handleAddLead = async (leadData: Omit<Lead, 'id' | 'createdAt' | 'fullName' | 'ownerUid'>) => {
+    if (!user) return;
+    setIsGeocoding(true);
     try {
-      await addDoc(collection(db, 'leads'), {
-        ...newLead,
-        ownerUid: user.uid,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        isDeleted: false
-      });
-      setIsModalOpen(false);
-      setNewLead({ fullName: '', phone: '', email: '', status: 'New', notes: '', source: '' });
-      setNotification('Lead created successfully!');
-      setTimeout(() => setNotification(null), 3000);
-    } catch (error) {
-      console.error("Error adding lead:", error);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleSkipTrace = async (leadId: string) => {
-    if (isSkipTracing) return;
-    setIsSkipTracing(leadId);
-    
-    try {
-      const lead = leads.find(l => l.id === leadId);
-      if (!lead) return;
-
-      const [firstName, ...lastNameParts] = lead.fullName.split(' ');
-      const lastName = lastNameParts.join(' ');
-
-      const response = await fetch('/api/skiptrace', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          firstName,
-          lastName,
-          address: lead.property?.address,
-          city: lead.property?.city,
-          state: lead.property?.state,
-          zip: lead.property?.zip
-        })
-      });
-
-      if (!response.ok) throw new Error('Skip trace failed');
-      const data = await response.json();
-
-      // Handle both real API response and demo fallback
-      const foundPhone = data.phone || data.results?.[0]?.phoneNumbers?.[0]?.phoneNumber;
-      const foundEmail = data.email || data.results?.[0]?.emails?.[0]?.email;
-
-      if (!foundPhone && !foundEmail) {
-        setNotification('No contact info found for this lead.');
-        setTimeout(() => setNotification(null), 3000);
-        return;
+      // Real geocoding
+      let lat = leadData.lat;
+      let lng = leadData.lng;
+      
+      if (leadData.address && !lat) {
+        const geo = await geocodeAddress(`${leadData.address}, ${leadData.city || ''}, ${leadData.state || ''}`);
+        if (geo) {
+          lat = geo.lat;
+          lng = geo.lng;
+        }
       }
 
-      await updateDoc(doc(db, 'leads', leadId), {
-        phone: lead.phone || foundPhone || '',
-        email: lead.email || foundEmail || '',
-        notes: (lead.notes || '') + `\n[Skip Trace ${new Date().toLocaleDateString()}]: ${data.isDemo ? 'Demo data generated.' : 'Real data found.'}`,
-        updatedAt: serverTimestamp()
+      const { score, isHot } = calculateLeadScore(leadData);
+
+      const docRef = await addDoc(collection(db, 'leads'), {
+        ...leadData,
+        lat: lat || null,
+        lng: lng || null,
+        fullName: `${leadData.firstName} ${leadData.lastName}`,
+        ownerUid: user.uid,
+        deleted: false,
+        createdAt: serverTimestamp(),
+        score,
+        isHot
       });
 
-      setNotification('Skip Trace successful! Contact info updated.');
-      setTimeout(() => setNotification(null), 3000);
+      await logActivity(
+        user.uid,
+        ActivityType.LEAD_CREATED,
+        `creó un nuevo lead`,
+        docRef.id,
+        `${leadData.firstName} ${leadData.lastName}`
+      );
+      setIsFormOpen(false);
+      toast.success('Lead agregado correctamente');
     } catch (error) {
-      console.error('Skip trace error:', error);
-      setNotification('Failed to perform skip trace. Check your API configuration.');
-      setTimeout(() => setNotification(null), 3000);
+      console.error('Error adding lead:', error);
+      toast.error('Error al agregar el lead');
     } finally {
-      setIsSkipTracing(null);
+      setIsGeocoding(false);
     }
   };
 
-  const handleUpdateLeadMainInfo = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!leadToEdit || isSubmitting) return;
-    setIsSubmitting(true);
+  const handleUpdateLead = async (leadData: Omit<Lead, 'id' | 'createdAt' | 'fullName' | 'ownerUid'>) => {
+    if (!editingLead || !user) return;
+    setIsGeocoding(true);
     try {
-      await updateDoc(doc(db, 'leads', leadToEdit.id), {
-        fullName: leadToEdit.fullName,
-        phone: leadToEdit.phone,
-        email: leadToEdit.email,
-        updatedAt: serverTimestamp()
-      });
-      setIsEditModalOpen(false);
-      setLeadToEdit(null);
-      setNotification('Lead updated successfully!');
-      setTimeout(() => setNotification(null), 3000);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `leads/${leadToEdit.id}`);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const [tempValues, setTempValues] = useState<Record<string, any>>({});
-
-  const handleSyncField = async (collectionName: string, docId: string | null, leadId: string, field: string, value: any) => {
-    try {
-      if (collectionName === 'properties') {
-        // For properties, we now prefer handleSaveProperty for better reliability
-        // but keeping this for simple single-field updates if needed
-        const existingProp = properties[leadId];
-        let updates: Record<string, any> = { [field]: value };
-        
-        if (field === 'arv' || field === 'repairEstimate') {
-          const currentArv = field === 'arv' ? Number(value) : (existingProp?.arv || 0);
-          const currentRepairs = field === 'repairEstimate' ? Number(value) : (existingProp?.repairEstimate || 0);
-          updates.mao = (currentArv * 0.70) - currentRepairs;
+      const leadRef = doc(db, 'leads', editingLead.id);
+      
+      let lat = leadData.lat;
+      let lng = leadData.lng;
+      
+      if (leadData.address && (!lat || leadData.address !== editingLead.address)) {
+        const geo = await geocodeAddress(`${leadData.address}, ${leadData.city || ''}, ${leadData.state || ''}`);
+        if (geo) {
+          lat = geo.lat;
+          lng = geo.lng;
         }
+      }
 
-        if (existingProp && existingProp.id) {
-          await updateDoc(doc(db, 'properties', existingProp.id), updates);
-        } else {
-          const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
-          const snap = await getDocs(q);
-          if (!snap.empty) {
-            await updateDoc(doc(db, 'properties', snap.docs[0].id), updates);
-          } else {
-            await addDoc(collection(db, 'properties'), {
-              leadId,
-              ownerUid: user.uid,
-              address: '',
-              arv: 0,
-              repairEstimate: 0,
-              askingPrice: 0,
-              mao: 0,
-              ...updates
-            });
+      const { score, isHot } = calculateLeadScore(leadData);
+
+      await updateDoc(leadRef, {
+        ...leadData,
+        lat: lat || null,
+        lng: lng || null,
+        fullName: `${leadData.firstName} ${leadData.lastName}`,
+        score,
+        isHot
+      });
+
+      await logActivity(
+        user.uid,
+        ActivityType.LEAD_UPDATED,
+        `actualizó la información del lead`,
+        editingLead.id,
+        `${leadData.firstName} ${leadData.lastName}`
+      );
+      setEditingLead(undefined);
+      setIsFormOpen(false);
+      toast.success('Lead actualizado correctamente');
+    } catch (error) {
+      console.error('Error updating lead:', error);
+      toast.error('Error al actualizar el lead');
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    if (!user) return;
+    try {
+      const leadRef = doc(db, 'leads', id);
+      const lead = leads.find(l => l.id === id);
+      await updateDoc(leadRef, {
+        deleted: true,
+        deletedAt: serverTimestamp()
+      });
+
+      await logActivity(
+        user.uid,
+        ActivityType.LEAD_DELETED,
+        `movió el lead a la papelera`,
+        id,
+        lead?.fullName
+      );
+
+      toast.success('Lead movido a la papelera');
+    } catch (error) {
+      console.error('Error deleting lead:', error);
+      toast.error('Error al eliminar el lead');
+    }
+  };
+
+  const handleRestoreLead = async (id: string) => {
+    try {
+      const leadRef = doc(db, 'leads', id);
+      await updateDoc(leadRef, {
+        deleted: false,
+        deletedAt: null
+      });
+      toast.success('Lead restaurado correctamente');
+    } catch (error) {
+      console.error('Error restoring lead:', error);
+      toast.error('Error al restaurar el lead');
+    }
+  };
+
+  const handlePermanentDelete = async (id: string) => {
+    console.log('Attempting permanent delete:', id);
+    try {
+      await deleteDoc(doc(db, 'leads', id));
+      toast.success('Lead eliminado permanentemente');
+      console.log('Lead permanently deleted:', id);
+    } catch (error) {
+      console.error('Error permanent deleting lead:', error);
+      toast.error('Error al eliminar permanentemente: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+    }
+  };
+
+  const handleImportLeads = async (importedLeads: Omit<Lead, 'id' | 'createdAt' | 'fullName' | 'ownerUid'>[]) => {
+    if (!user) return;
+    try {
+      for (const l of importedLeads) {
+        let lat = l.lat;
+        let lng = l.lng;
+        
+        if (l.address && !lat) {
+          const geo = await geocodeAddress(`${l.address}, ${l.city || ''}, ${l.state || ''}`);
+          if (geo) {
+            lat = geo.lat;
+            lng = geo.lng;
           }
         }
-      } else if (collectionName === 'leads' && docId) {
-        await updateDoc(doc(db, 'leads', docId), { [field]: value });
+
+        await addDoc(collection(db, 'leads'), {
+          ...l,
+          lat: lat || null,
+          lng: lng || null,
+          fullName: `${l.firstName} ${l.lastName}`,
+          ownerUid: user.uid,
+          deleted: false,
+          createdAt: serverTimestamp(),
+        });
       }
-      
-      setTempValues(prev => {
-        const next = { ...prev };
-        delete next[`${collectionName}-${leadId}-${field}`];
-        return next;
-      });
+      setIsImporterOpen(false);
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `${collectionName}/${docId || 'new'}`);
+      console.error('Error importing leads:', error);
     }
   };
 
-  const handleSaveProperty = async (leadId: string) => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
-    try {
-      const fields = ['address', 'arv', 'repairEstimate', 'askingPrice'];
-      const updates: Record<string, any> = {};
-      let hasChanges = false;
-      
-      fields.forEach(field => {
-        const tempKey = `properties-${leadId}-${field}`;
-        if (tempKey in tempValues) {
-          let val = tempValues[tempKey];
-          if (field !== 'address' && val !== '') val = Number(val);
-          updates[field] = val;
-          hasChanges = true;
-        }
-      });
-
-      if (!hasChanges) {
-        setNotification('No changes to save');
-        setTimeout(() => setNotification(null), 3000);
-        return;
-      }
-
-      const existingProp = properties[leadId];
-      
-      // Recalculate MAO
-      const currentArv = updates.arv !== undefined ? Number(updates.arv) : (existingProp?.arv || 0);
-      const currentRepairs = updates.repairEstimate !== undefined ? Number(updates.repairEstimate) : (existingProp?.repairEstimate || 0);
-      updates.mao = (currentArv * 0.70) - currentRepairs;
-
-      if (existingProp && existingProp.id) {
-        await updateDoc(doc(db, 'properties', existingProp.id), updates);
-      } else {
-        const q = query(collection(db, 'properties'), where('leadId', '==', leadId));
-        const snap = await getDocs(q);
-        if (!snap.empty) {
-          await updateDoc(doc(db, 'properties', snap.docs[0].id), updates);
-        } else {
-          await addDoc(collection(db, 'properties'), {
-            leadId,
-            ownerUid: user.uid,
-            address: '',
-            arv: 0,
-            repairEstimate: 0,
-            askingPrice: 0,
-            mao: 0,
-            ...updates
-          });
-        }
-      }
-
-      setTempValues(prev => {
-        const next = { ...prev };
-        fields.forEach(field => delete next[`properties-${leadId}-${field}`]);
-        return next;
-      });
-
-      setNotification('Property details saved!');
-      setTimeout(() => setNotification(null), 3000);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'properties');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const getFieldValue = (collectionName: string, leadId: string, field: string, defaultValue: any) => {
-    const tempKey = `${collectionName}-${leadId}-${field}`;
-    if (tempKey in tempValues) return tempValues[tempKey];
-    
-    if (collectionName === 'properties') {
-      return properties[leadId]?.[field as keyof Property] ?? defaultValue;
-    } else if (collectionName === 'leads') {
-      const lead = leads.find(l => l.id === leadId);
-      return lead?.[field as keyof Lead] ?? defaultValue;
-    }
-    return defaultValue;
-  };
-
-  const handleUpdateProperty = async (leadId: string, field: string, value: any) => {
-    // This is now only used for immediate updates if needed, 
-    // but we'll keep it for compatibility or remove if unused.
-    // For now, let's make it use the sync logic.
-    handleSyncField('properties', null, leadId, field, value);
-  };
-
-  const handleCreateStatus = async () => {
-    if (!newStatusName.trim()) return;
-    const updatedStatuses = [...customStatuses, newStatusName.trim()];
-    
-    const q = query(
-      collection(db, 'settings'),
-      where('ownerUid', '==', user.uid),
-      where('type', '==', 'lead_statuses')
-    );
-    const snapshot = await getDocs(q);
-    
-    if (snapshot.empty) {
-      await addDoc(collection(db, 'settings'), {
-        type: 'lead_statuses',
-        ownerUid: user.uid,
-        values: updatedStatuses
-      });
+  const filteredLeads = leads.filter((lead) => {
+    // Filter by deleted status
+    if (showDeleted) {
+      if (!lead.deleted) return false;
     } else {
-      await updateDoc(doc(db, 'settings', snapshot.docs[0].id), {
-        values: updatedStatuses
-      });
-    }
-    setNewStatusName('');
-  };
-
-  const handleUpdateLeadStatus = async (leadId: string, newStatus: string) => {
-    const lead = leads.find(l => l.id === leadId);
-    if (!lead) return;
-
-    const update = {
-      status: newStatus,
-      note: statusNote || `Status changed to ${newStatus}`,
-      timestamp: new Date()
-    };
-
-    await updateDoc(doc(db, 'leads', leadId), {
-      status: newStatus,
-      statusHistory: arrayUnion(update),
-      updatedAt: serverTimestamp()
-    });
-
-    // Automation: Create tasks based on status
-    if (newStatus === 'Appointment') {
-      await addDoc(collection(db, 'tasks'), {
-        title: `Prepare Comps for ${lead.fullName}`,
-        completed: false,
-        leadId: lead.id,
-        ownerUid: user.uid,
-        dueDate: serverTimestamp(),
-        createdAt: serverTimestamp()
-      });
-      setNotification('Automation: "Prepare Comps" task created!');
-    } else if (newStatus === 'Under Contract') {
-      await addDoc(collection(db, 'tasks'), {
-        title: `Send contract to Title Co - ${lead.fullName}`,
-        completed: false,
-        leadId: lead.id,
-        ownerUid: user.uid,
-        dueDate: serverTimestamp(),
-        createdAt: serverTimestamp()
-      });
-      setNotification('Automation: "Send to Title Co" task created!');
+      if (lead.deleted) return false;
     }
 
-    setStatusNote('');
-    setTimeout(() => setNotification(null), 3000);
-  };
+    const firstName = lead.firstName || '';
+    const lastName = lead.lastName || '';
+    const email = lead.email || '';
+    const phone = String(lead.phone || '');
 
-  const getStatusBadgeClass = (status: string) => {
-    switch (status) {
-      case 'New': return "bg-blue-500/10 text-blue-400";
-      case 'Contacted': return "bg-purple-500/10 text-purple-400";
-      case 'Appointment': return "bg-amber-500/10 text-amber-400";
-      case 'Under Contract': return "bg-emerald-500/10 text-emerald-400";
-      case 'Closed': return "bg-green-500/10 text-green-400";
-      case 'Dead': return "bg-red-500/10 text-red-400";
-      default: return "bg-zinc-800 text-zinc-400";
-    }
-  };
-
-  const formatDate = (ts: any) => {
-    if (!ts) return '';
-    if (ts.seconds) return new Date(ts.seconds * 1000).toLocaleDateString();
-    if (ts instanceof Date) return ts.toLocaleDateString();
-    return new Date(ts).toLocaleDateString();
-  };
-
-  const filteredLeads = leads.filter(l => {
-    const matchesSearch = l.fullName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      l.phone.includes(searchTerm) ||
-      l.email.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = 
+      `${firstName} ${lastName}`.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      phone.toLowerCase().includes(searchTerm.toLowerCase());
     
-    const matchesTrash = showTrash ? l.isDeleted === true : !l.isDeleted;
+    const matchesFilter = filterStatus === 'All' || lead.status === filterStatus;
     
-    return matchesSearch && matchesTrash;
+    return matchesSearch && matchesFilter;
   });
 
+  const exportToCSV = () => {
+    const headers = ['Nombre', 'Apellido', 'Email', 'Teléfono', 'Fuente', 'Estado', 'Notas', 'Creado'];
+    const rows = leads.map(l => [
+      l.firstName || '',
+      l.lastName || '',
+      l.email || '',
+      l.phone || '',
+      l.source || '',
+      l.status || '',
+      (l.notes || '').replace(/\n/g, ' '),
+      l.createdAt?.toDate ? l.createdAt.toDate().toLocaleDateString() : (l.createdAt ? new Date(l.createdAt).toLocaleDateString() : new Date().toLocaleDateString())
+    ]);
+
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(r => r.join(','))
+    ].join('\n');
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `leads_export_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
-    <div className="space-y-8">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="space-y-8 pb-20">
+      {/* Header Section */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
-            {showTrash ? 'Recycle Bin' : 'Leads'}
+          <h1 className="text-3xl font-serif italic font-bold text-white">
+            {showDeleted ? 'Papelera de Leads' : 'Gestión de Leads'}
           </h1>
-          <p className="text-zinc-500 text-sm">
-            {showTrash 
-              ? 'Restore or permanently delete your leads' 
-              : 'Manage your potential deals and seller contacts'}
+          <p className="text-zinc-500 text-sm mt-1 uppercase tracking-widest">
+            {showDeleted ? 'Leads eliminados recientemente' : 'Pipeline de Ventas & Prospección'}
           </p>
         </div>
-        <div className="flex items-center gap-3 w-full sm:w-auto">
-          {!showTrash && (
-            <div className="flex bg-zinc-900 border border-zinc-800 rounded-xl p-1">
-              <button 
-                onClick={() => setViewMode('list')}
-                className={cn(
-                  "p-2 rounded-lg transition-all",
-                  viewMode === 'list' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
-                )}
-                title="List View"
-              >
-                <List size={18} />
-              </button>
-              <button 
-                onClick={() => setViewMode('pipeline')}
-                className={cn(
-                  "p-2 rounded-lg transition-all",
-                  viewMode === 'pipeline' ? "bg-zinc-800 text-white" : "text-zinc-500 hover:text-zinc-300"
-                )}
-                title="Pipeline View"
-              >
-                <LayoutGrid size={18} />
-              </button>
-            </div>
-          )}
-          <button 
-            onClick={() => setShowTrash(!showTrash)}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowDeleted(!showDeleted)}
             className={cn(
-              "flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-bold transition-all border",
-              showTrash 
-                ? "bg-zinc-800 border-zinc-700 text-white" 
-                : "bg-transparent border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700"
+              "flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium border",
+              showDeleted 
+                ? "bg-amber-500/10 border-amber-500/50 text-amber-500 hover:bg-amber-500/20" 
+                : "bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700"
             )}
           >
-            {showTrash ? <Plus size={18} /> : <Trash2 size={18} />}
-            {showTrash ? 'Back to Leads' : 'Recycle Bin'}
+            {showDeleted ? <List size={18} /> : <Trash2 size={18} />}
+            {showDeleted ? 'Ver Activos' : 'Ver Papelera'}
           </button>
-          {!showTrash && (
-            <button 
-              onClick={() => setIsModalOpen(true)}
-              className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-3 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all"
-            >
-              <Plus size={18} />
-              Add Lead
-            </button>
-          )}
+          <button
+            onClick={exportToCSV}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-all text-sm font-medium border border-zinc-700"
+          >
+            <Download size={18} />
+            Exportar
+          </button>
+          <button
+            onClick={() => setIsImporterOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl transition-all text-sm font-medium border border-zinc-700"
+          >
+            <Upload size={18} />
+            Importar
+          </button>
+          <button
+            onClick={() => setIsFormOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl transition-all text-sm font-medium shadow-lg shadow-blue-900/20"
+          >
+            <Plus size={18} />
+            Nuevo Lead
+          </button>
         </div>
       </div>
 
-      <div className="relative">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500" size={18} />
-        <input 
-          type="text" 
-          placeholder="Search leads by name, phone, or email..."
-          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-3 pl-12 pr-4 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 transition-all"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-        />
+      {/* Filters & Search */}
+      <div className="flex flex-col lg:flex-row gap-4 items-center">
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-3 gap-4 bg-zinc-900/50 p-4 rounded-2xl border border-zinc-800 w-full">
+          <div className="relative col-span-1 md:col-span-2">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 w-5 h-5" />
+            <input
+              type="text"
+              placeholder="Buscar por nombre, email o teléfono..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-zinc-200"
+            />
+          </div>
+          <div className="relative">
+            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 w-5 h-5" />
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as LeadStatus | 'All')}
+              className="w-full pl-10 pr-4 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all text-zinc-200 appearance-none"
+            >
+              <option value="All">Todos los estados</option>
+              {Object.values(LeadStatus).map((status) => (
+                <option key={status} value={status}>{status}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex bg-zinc-900 border border-zinc-800 rounded-2xl p-1.5 h-fit">
+          <button 
+            onClick={() => setView('list')}
+            className={cn(
+              "p-2.5 rounded-xl transition-all",
+              view === 'list' ? "bg-zinc-800 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+            )}
+          >
+            <List size={20} />
+          </button>
+          <button 
+            onClick={() => setView('map')}
+            className={cn(
+              "p-2.5 rounded-xl transition-all",
+              view === 'map' ? "bg-zinc-800 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+            )}
+          >
+            <MapIcon size={20} />
+          </button>
+        </div>
       </div>
 
-      {viewMode === 'list' || showTrash ? (
-        <div className="grid grid-cols-1 gap-4">
-          <AnimatePresence>
-            {filteredLeads.map((lead) => (
-              <motion.div 
-                key={lead.id}
-                layout
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 10 }}
-                className="bg-zinc-900/50 border border-zinc-800 rounded-2xl overflow-hidden hover:border-zinc-700 transition-all group"
+      {/* Stats Overview */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {[
+          { label: 'Total Leads', value: leads.length, color: 'text-blue-400' },
+          { label: 'Nuevos', value: leads.filter(l => l.status === LeadStatus.NEW).length, color: 'text-emerald-400' },
+          { label: 'Cualificados', value: leads.filter(l => l.status === LeadStatus.QUALIFIED).length, color: 'text-amber-400' },
+          { label: 'Contactados', value: leads.filter(l => l.status === LeadStatus.CONTACTED).length, color: 'text-purple-400' },
+        ].map((stat, i) => (
+          <div key={i} className="bg-zinc-900/30 border border-zinc-800/50 p-4 rounded-2xl">
+            <p className="text-[10px] uppercase tracking-widest text-zinc-500 font-bold mb-1">{stat.label}</p>
+            <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Lead List or Map View */}
+      {view === 'list' ? (
+        <LeadList
+          leads={filteredLeads}
+          properties={properties}
+          sequences={sequences}
+          onEdit={showDeleted ? undefined : (lead) => {
+            setEditingLead(lead);
+            setIsFormOpen(true);
+          }}
+          onDelete={showDeleted ? handlePermanentDelete : handleDeleteLead}
+          onRestore={showDeleted ? handleRestoreLead : undefined}
+        />
+      ) : (
+        <div className="h-[600px] bg-zinc-950 border border-zinc-800 rounded-3xl overflow-hidden relative z-0 shadow-2xl">
+          <MapContainer 
+            center={
+              filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number') 
+                ? [filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number')!.lat!, filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number')!.lng!]
+                : [25.7617, -80.1918]
+            } 
+            zoom={12} 
+            style={{ height: '100%', width: '100%' }}
+            className="z-0"
+          >
+            <RecenterMap 
+              center={
+                filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number') 
+                  ? [filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number')!.lat!, filteredLeads.find(l => typeof l.lat === 'number' && typeof l.lng === 'number')!.lng!]
+                  : [25.7617, -80.1918]
+              } 
+            />
+            <TileLayer
+              attribution={mapStyle === 'dark' 
+                ? '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                : '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              }
+              url={mapStyle === 'dark'
+                ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+                : "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              }
+            />
+            {filteredLeads.filter(l => typeof l.lat === 'number' && typeof l.lng === 'number').map(lead => (
+              <Marker 
+                key={lead.id} 
+                position={[lead.lat!, lead.lng!]}
               >
-                {/* ... existing lead card ... */}
-              <div 
-                className="p-4 md:p-6 flex items-center justify-between cursor-pointer"
-                onClick={() => setExpandedLead(expandedLead === lead.id ? null : lead.id)}
-              >
-                <div className="flex items-center gap-4 md:gap-6 flex-1 min-w-0">
-                  <div className="space-y-1 min-w-0 flex-1">
-                    <h3 className="font-bold text-base md:text-lg truncate">{lead.fullName}</h3>
-                    <div className="flex items-center gap-2">
-                      <span className={cn(
-                        "inline-block px-2 py-0.5 rounded text-[8px] md:text-[10px] font-bold uppercase tracking-wider",
-                        getStatusBadgeClass(lead.status)
-                      )}>
-                        {lead.status}
-                      </span>
-                      {properties[lead.id]?.address && (
-                        <div className="flex items-center gap-1 text-[10px] text-zinc-500 truncate max-w-[150px]">
-                          <MapPin size={10} className="shrink-0" />
-                          <span className="truncate">{properties[lead.id].address}</span>
-                        </div>
-                      )}
-                      <div className="md:hidden flex items-center gap-2 text-[10px] text-zinc-500">
-                        <Phone size={10} />
-                        {lead.phone || 'N/A'}
-                      </div>
+                <Popup>
+                  <div className="p-2 space-y-2 min-w-[200px]">
+                    <div className="flex items-center justify-between">
+                      <h3 className="font-bold text-zinc-900">{lead.fullName}</h3>
+                      <span className="text-[8px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-bold uppercase">{lead.status}</span>
                     </div>
-                  </div>
-                  
-                  <div className="hidden md:flex items-center gap-6 text-sm text-zinc-500">
-                    <div className="flex items-center gap-2">
-                      <Phone size={14} />
-                      {lead.phone || 'N/A'}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Mail size={14} />
-                      {lead.email || 'N/A'}
-                    </div>
-                    {properties[lead.id]?.address && (
-                      <a 
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(properties[lead.id].address)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                        className="flex items-center gap-2 text-emerald-500 hover:text-emerald-400 transition-colors"
-                        title="View on Google Maps"
-                      >
-                        <Map size={14} />
-                        <span className="max-w-[150px] truncate">{properties[lead.id].address}</span>
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    {!showTrash && (
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLeadToEdit(lead);
-                          setIsEditModalOpen(true);
-                        }}
-                        className="p-2 hover:bg-zinc-800 rounded-lg text-zinc-600 hover:text-white transition-all"
-                        title="Edit Lead Info"
-                      >
-                        <Edit2 size={16} />
-                      </button>
-                    )}
-                    {showTrash ? (
-                      <div className="flex items-center gap-2">
-                        <button 
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            try {
-                              await updateDoc(doc(db, 'leads', lead.id), { 
-                                isDeleted: false,
-                                deletedAt: null 
-                              });
-                              setNotification('Lead restored!');
-                              setTimeout(() => setNotification(null), 3000);
-                            } catch (error) {
-                              handleFirestoreError(error, OperationType.UPDATE, `leads/${lead.id}`);
-                            }
-                          }}
-                          className="p-2 hover:bg-emerald-500/10 rounded-lg text-zinc-600 hover:text-emerald-400 transition-all"
-                          title="Restore Lead"
-                        >
-                          <RotateCcw size={16} />
-                        </button>
-                        {deleteConfirmId === lead.id ? (
-                          <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
-                            <button 
-                              onClick={async (e) => {
-                                e.stopPropagation();
-                                try {
-                                  await deleteDoc(doc(db, 'leads', lead.id));
-                                  const prop = properties[lead.id];
-                                  if (prop) await deleteDoc(doc(db, 'properties', prop.id));
-                                  setDeleteConfirmId(null);
-                                  setNotification('Lead permanently deleted');
-                                  setTimeout(() => setNotification(null), 3000);
-                                } catch (error) {
-                                  handleFirestoreError(error, OperationType.DELETE, `leads/${lead.id}`);
-                                }
-                              }}
-                              className="px-3 py-1 bg-red-500 text-white text-[10px] font-bold rounded-lg hover:bg-red-600 transition-all"
-                            >
-                              Delete Forever
-                            </button>
-                            <button 
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setDeleteConfirmId(null);
-                              }}
-                              className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                        ) : (
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteConfirmId(lead.id);
-                            }}
-                            className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
-                            title="Delete Permanently"
-                          >
-                            <Trash size={16} />
-                          </button>
-                        )}
-                      </div>
-                    ) : (
-                      deleteConfirmId === lead.id ? (
-                        <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
-                          <button 
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              try {
-                                await updateDoc(doc(db, 'leads', lead.id), { 
-                                  isDeleted: true,
-                                  deletedAt: serverTimestamp()
-                                });
-                                setDeleteConfirmId(null);
-                                setNotification('Lead moved to Recycle Bin');
-                                setTimeout(() => setNotification(null), 3000);
-                              } catch (error) {
-                                handleFirestoreError(error, OperationType.UPDATE, `leads/${lead.id}`);
-                              }
-                            }}
-                            className="px-3 py-1 bg-amber-500 text-white text-[10px] font-bold rounded-lg hover:bg-amber-600 transition-all"
-                          >
-                            Move to Trash
-                          </button>
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setDeleteConfirmId(null);
-                            }}
-                            className="p-1 hover:bg-zinc-800 rounded-lg text-zinc-500"
-                          >
-                            <X size={14} />
-                          </button>
-                        </div>
-                      ) : (
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setDeleteConfirmId(lead.id);
-                          }}
-                          className="p-2 hover:bg-red-500/10 rounded-lg text-zinc-600 hover:text-red-400 transition-all"
-                          title="Move to Trash"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      )
-                    )}
-                  </div>
-                  {expandedLead === lead.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-                </div>
-              </div>
-
-              {expandedLead === lead.id && (
-                <motion.div 
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  className="px-4 md:px-6 pb-6 border-t border-zinc-800 pt-6"
-                >
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                          <Zap size={14} className="text-blue-400" />
-                          Skip Trace Pro
-                        </h4>
-                        <button 
-                          onClick={() => handleSkipTrace(lead.id)}
-                          disabled={!!isSkipTracing}
-                          className={cn(
-                            "text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 transition-all px-3 py-1.5 rounded-lg border",
-                            isSkipTracing === lead.id 
-                              ? "bg-blue-500/20 border-blue-500/30 text-blue-400 cursor-not-allowed" 
-                              : "bg-blue-600 text-white border-blue-500 hover:bg-blue-500"
-                          )}
-                        >
-                          {isSkipTracing === lead.id ? (
-                            <Loader2 size={12} className="animate-spin" />
-                          ) : (
-                            <Zap size={12} fill="currentColor" />
-                          )}
-                          {isSkipTracing === lead.id ? 'Tracing...' : 'Skip Trace Now'}
-                        </button>
-                      </div>
-                      <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-2xl space-y-2">
-                        <p className="text-[10px] text-zinc-400 leading-relaxed">
-                          Find hidden phone numbers, emails, and relative info for this property owner instantly.
-                        </p>
-                        <div className="flex items-center gap-4 text-[10px] font-bold text-blue-400 uppercase tracking-widest">
-                          <span>$0.15 / Hit</span>
-                          <span>98% Accuracy</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                          <Home size={14} />
-                          Property Details
-                        </h4>
-                        <button 
-                          onClick={() => handleSaveProperty(lead.id)}
-                          disabled={isSubmitting}
-                          className={cn(
-                            "text-[10px] font-bold uppercase tracking-widest flex items-center gap-1 transition-all",
-                            isSubmitting ? "text-zinc-600 cursor-not-allowed" : "text-emerald-500 hover:text-emerald-400"
-                          )}
-                        >
-                          {isSubmitting ? (
-                            <div className="w-3 h-3 border-2 border-zinc-600 border-t-transparent rounded-full animate-spin" />
-                          ) : (
-                            <CheckSquare size={12} />
-                          )}
-                          {isSubmitting ? 'Saving...' : 'Save Details'}
-                        </button>
-                      </div>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Address</label>
-                          <div className="flex gap-2">
-                            <input 
-                              type="text"
-                              className="flex-1 bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={getFieldValue('properties', lead.id, 'address', '')}
-                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-address`]: e.target.value }))}
-                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'address', e.target.value)}
-                              placeholder="123 Main St, City, State"
-                            />
-                            {properties[lead.id]?.address && (
-                              <a 
-                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(properties[lead.id].address)}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="p-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-zinc-400 hover:text-white transition-all flex items-center justify-center"
-                                title="View on Google Maps"
-                              >
-                                <Map size={16} />
-                              </a>
-                            )}
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-3 gap-4">
-                          <div>
-                            <label className="text-[10px] text-zinc-600 uppercase mb-1 block">ARV</label>
-                            <input 
-                              type="number"
-                              className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={getFieldValue('properties', lead.id, 'arv', '')}
-                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-arv`]: e.target.value }))}
-                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'arv', Number(e.target.value))}
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Repairs</label>
-                            <input 
-                              type="number"
-                              className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={getFieldValue('properties', lead.id, 'repairEstimate', '')}
-                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-repairEstimate`]: e.target.value }))}
-                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'repairEstimate', Number(e.target.value))}
-                            />
-                          </div>
-                          <div>
-                            <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Asking</label>
-                            <input 
-                              type="number"
-                              className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                              value={getFieldValue('properties', lead.id, 'askingPrice', '')}
-                              onChange={(e) => setTempValues(prev => ({ ...prev, [`properties-${lead.id}-askingPrice`]: e.target.value }))}
-                              onBlur={(e) => handleSyncField('properties', null, lead.id, 'askingPrice', Number(e.target.value))}
-                            />
-                          </div>
-                        </div>
-                        <div className="pt-2">
-                          <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-3 flex items-center justify-between">
-                            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">Maximum Allowable Offer (MAO)</span>
-                            <span className="text-lg font-bold text-emerald-400">
-                              ${(() => {
-                                const arv = Number(getFieldValue('properties', lead.id, 'arv', 0));
-                                const repairs = Number(getFieldValue('properties', lead.id, 'repairEstimate', 0));
-                                return ((arv * 0.70) - repairs).toLocaleString();
-                              })()}
-                            </span>
-                          </div>
-                          <p className="text-[8px] text-zinc-600 mt-1 italic text-center">Formula: (ARV * 70%) - Repairs</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-6">
-                      <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Clock size={14} />
-                        Status & Timeline
-                      </h4>
-                      <div className="space-y-4">
-                        <div className="flex gap-2">
-                          <select 
-                            className="flex-1 bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                            value={lead.status}
-                            onChange={(e) => handleUpdateLeadStatus(lead.id, e.target.value)}
-                          >
-                            {customStatuses.map(s => (
-                              <option key={s} value={s}>{s}</option>
-                            ))}
-                          </select>
-                        </div>
-                        <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
-                          {lead.statusHistory?.slice().reverse().map((update, i) => (
-                            <div key={i} className="p-2 bg-zinc-800/30 rounded-lg border border-zinc-800/50">
-                              <div className="flex justify-between items-center mb-1">
-                                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">{update.status}</span>
-                                <span className="text-[8px] text-zinc-500">{formatDate(update.timestamp)}</span>
-                              </div>
-                              <p className="text-[10px] text-zinc-400 italic">"{update.note}"</p>
-                            </div>
-                          ))}
-                          {!lead.statusHistory?.length && <p className="text-[10px] text-zinc-600 italic text-center py-4">No status updates yet.</p>}
-                        </div>
-                        <div className="pt-2 border-t border-zinc-800">
-                          <div className="flex gap-2">
-                            <input 
-                              type="text"
-                              placeholder="Add status note..."
-                              className="flex-1 bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-[10px]"
-                              value={statusNote}
-                              onChange={(e) => setStatusNote(e.target.value)}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-6">
-                      <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Edit2 size={14} />
-                        Notes & Source
-                      </h4>
-                      <div className="space-y-4">
-                        <div>
-                          <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Lead Source</label>
-                          <input 
-                            type="text"
-                            className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm"
-                            value={getFieldValue('leads', lead.id, 'source', '')}
-                            onChange={(e) => setTempValues(prev => ({ ...prev, [`leads-${lead.id}-source`]: e.target.value }))}
-                            onBlur={(e) => handleSyncField('leads', lead.id, lead.id, 'source', e.target.value)}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] text-zinc-600 uppercase mb-1 block">Notes</label>
-                          <textarea 
-                            className="w-full bg-zinc-800/50 border border-zinc-700 rounded-lg px-3 py-2 text-sm h-24 resize-none"
-                            value={getFieldValue('leads', lead.id, 'notes', '')}
-                            onChange={(e) => setTempValues(prev => ({ ...prev, [`leads-${lead.id}-notes`]: e.target.value }))}
-                            onBlur={(e) => handleSyncField('leads', lead.id, lead.id, 'notes', e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-8 pt-6 border-t border-zinc-800 flex flex-col sm:flex-row gap-3 sm:gap-4">
-                    <div className="flex gap-3 flex-1">
-                      <a 
-                        href={`tel:${lead.phone}`}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-xs font-bold transition-all"
-                      >
-                        <Phone size={14} />
-                        Call
-                      </a>
-                      <a 
-                        href={`mailto:${lead.email}?subject=Property Inquiry - ${properties[lead.id]?.address || ''}`}
-                        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-xs font-bold transition-all"
-                      >
-                        <Mail size={14} />
-                        Email
-                      </a>
+                    <p className="text-xs text-zinc-600">{lead.address || 'No address'}</p>
+                    <div className="flex items-center gap-2 text-xs text-zinc-500">
+                      <MapPin size={12} />
+                      {lead.city}, {lead.state}
                     </div>
                     <button 
-                      onClick={async () => {
-                        await addDoc(collection(db, 'tasks'), {
-                          title: `Follow up with ${lead.fullName}`,
-                          completed: false,
-                          leadId: lead.id,
-                          ownerUid: user.uid,
-                          dueDate: serverTimestamp(),
-                          notified: false,
-                          createdAt: serverTimestamp()
-                        });
-                        setNotification('Follow-up task created!');
-                        setTimeout(() => setNotification(null), 3000);
+                      onClick={() => {
+                        setEditingLead(lead);
+                        setIsFormOpen(true);
                       }}
-                      className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 rounded-xl text-xs font-bold transition-all"
+                      className="w-full mt-2 py-1.5 bg-zinc-900 text-white text-[10px] font-bold uppercase tracking-widest rounded-lg"
                     >
-                      <Clock size={14} />
-                      Schedule Follow-up
+                      Editar Lead
                     </button>
                   </div>
-                </motion.div>
-              )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
-      ) : (
-        <div className="flex gap-6 overflow-x-auto pb-8 custom-scrollbar min-h-[600px] -mx-4 px-4 sm:mx-0 sm:px-0">
-          {customStatuses.map((status) => {
-            const statusLeads = filteredLeads.filter(l => l.status === status);
-            return (
-              <div key={status} className="flex-shrink-0 w-80 flex flex-col gap-4">
-                <div className="flex items-center justify-between px-2">
-                  <div className="flex items-center gap-2">
-                    <div className={cn(
-                      "w-2 h-2 rounded-full",
-                      status === 'New' ? "bg-blue-500" :
-                      status === 'Contacted' ? "bg-purple-500" :
-                      status === 'Appointment' ? "bg-amber-500" :
-                      status === 'Under Contract' ? "bg-emerald-500" :
-                      status === 'Closed' ? "bg-green-500" :
-                      status === 'Dead' ? "bg-red-500" : "bg-zinc-500"
-                    )} />
-                    <h3 className="font-bold text-sm uppercase tracking-widest text-zinc-400">{status}</h3>
-                  </div>
-                  <span className="text-[10px] font-bold bg-zinc-900 text-zinc-500 px-2 py-0.5 rounded-full border border-zinc-800">
-                    {statusLeads.length}
-                  </span>
-                </div>
-                
-                <div className="flex-1 flex flex-col gap-3 min-h-[500px] p-2 bg-zinc-900/20 border border-dashed border-zinc-800 rounded-3xl">
-                  {statusLeads.map((lead) => (
-                    <motion.div
-                      key={lead.id}
-                      layoutId={lead.id}
-                      onClick={() => {
-                        setExpandedLead(lead.id);
-                        setViewMode('list');
-                      }}
-                      className="bg-zinc-900 border border-zinc-800 p-4 rounded-2xl cursor-pointer hover:border-zinc-700 transition-all group shadow-lg"
-                    >
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="font-bold text-sm truncate">{lead.fullName}</h4>
-                          <div className="flex items-center gap-1 text-[10px] text-zinc-500">
-                            <Clock size={10} />
-                            {formatDate(lead.updatedAt)}
-                          </div>
-                        </div>
-                        
-                        {properties[lead.id]?.address && (
-                          <div className="flex items-center gap-2 text-[10px] text-zinc-500">
-                            <MapPin size={10} className="shrink-0" />
-                            <span className="truncate">{properties[lead.id].address}</span>
-                          </div>
-                        )}
-                        
-                        <div className="flex items-center justify-between pt-2 border-t border-zinc-800/50">
-                          <div className="flex items-center gap-2">
-                            <div className="w-6 h-6 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center text-[8px] font-bold">
-                              {lead.fullName.charAt(0)}
-                            </div>
-                            <span className="text-[10px] text-zinc-500">{lead.source || 'Direct'}</span>
-                          </div>
-                          <div className="flex gap-1">
-                            {lead.phone && <Phone size={10} className="text-zinc-600" />}
-                            {lead.email && <Mail size={10} className="text-zinc-600" />}
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))}
-                  
-                  {statusLeads.length === 0 && (
-                    <div className="flex-1 flex items-center justify-center">
-                      <p className="text-[10px] text-zinc-700 italic uppercase tracking-widest">Empty Stage</p>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {notification && (
-        <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] animate-in fade-in slide-in-from-bottom-4">
-          <div className="bg-emerald-500 text-white px-6 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3">
-            <CheckSquare size={18} />
-            {notification}
-          </div>
-        </div>
-      )}
-
-      {/* Add Lead Modal */}
-      <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsModalOpen(false)}
-              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-2xl"
+                </Popup>
+              </Marker>
+            ))}
+          </MapContainer>
+          <div className="absolute bottom-4 right-4 z-[1000] flex flex-col gap-2">
+            <button 
+              onClick={() => setMapStyle(mapStyle === 'dark' ? 'street' : 'dark')}
+              className="bg-zinc-900/90 backdrop-blur-md border border-zinc-800 p-3 rounded-xl shadow-xl text-white hover:bg-zinc-800 transition-all flex items-center gap-2"
             >
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-2xl font-bold">Add New Lead</h2>
-                <button onClick={() => setIsModalOpen(false)} className="p-2 hover:bg-zinc-800 rounded-full">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <form onSubmit={handleAddLead} className="space-y-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Full Name</label>
-                    <input 
-                      required
-                      type="text" 
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                      value={newLead.fullName}
-                      onChange={(e) => setNewLead({...newLead, fullName: e.target.value})}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Phone</label>
-                      <input 
-                        type="tel" 
-                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                        value={newLead.phone}
-                        onChange={(e) => setNewLead({...newLead, phone: e.target.value})}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Email</label>
-                      <input 
-                        type="email" 
-                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                        value={newLead.email}
-                        onChange={(e) => setNewLead({...newLead, email: e.target.value})}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Status</label>
-                    <div className="flex gap-2">
-                      <select 
-                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                        value={newLead.status}
-                        onChange={(e) => setNewLead({...newLead, status: e.target.value})}
-                      >
-                        {customStatuses.map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="mt-4 pt-4 border-t border-zinc-800">
-                      <p className="text-[10px] text-zinc-500 uppercase mb-2">Create New Status</p>
-                      <div className="flex gap-2">
-                        <input 
-                          type="text"
-                          placeholder="New status name..."
-                          className="flex-1 bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-2 text-xs"
-                          value={newStatusName}
-                          onChange={(e) => setNewStatusName(e.target.value)}
-                        />
-                        <button 
-                          type="button"
-                          onClick={handleCreateStatus}
-                          className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-xl text-xs font-bold"
-                        >
-                          Add
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Notes</label>
-                    <textarea 
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 h-24 resize-none"
-                      value={newLead.notes}
-                      onChange={(e) => setNewLead({...newLead, notes: e.target.value})}
-                    />
-                  </div>
-                </div>
-
-                <button 
-                  type="submit"
-                  disabled={isSubmitting}
-                  className={cn(
-                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
-                    isSubmitting && "opacity-50 cursor-not-allowed"
-                  )}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                      Creating...
-                    </>
-                  ) : (
-                    "Create Lead"
-                  )}
-                </button>
-              </form>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Edit Lead Modal */}
-      <AnimatePresence>
-        {isEditModalOpen && leadToEdit && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
+              <MapIcon size={16} className="text-emerald-400" />
+              <span className="text-[10px] font-bold uppercase tracking-widest">Estilo: {mapStyle === 'dark' ? 'Oscuro' : 'Calle'}</span>
+            </button>
+            <button 
               onClick={() => {
-                setIsEditModalOpen(false);
-                setLeadToEdit(null);
+                const firstLead = filteredLeads.find(l => typeof l.lat === 'number');
+                if (firstLead) {
+                  // This will trigger the RecenterMap component
+                  setSearchTerm(searchTerm); // Force re-render if needed, but center is derived from filteredLeads
+                }
               }}
-              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-2xl"
+              className="bg-zinc-900/90 backdrop-blur-md border border-zinc-800 p-3 rounded-xl shadow-xl text-white hover:bg-zinc-800 transition-all flex items-center gap-2"
             >
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-2xl font-bold">Edit Lead Info</h2>
-                <button onClick={() => {
-                  setIsEditModalOpen(false);
-                  setLeadToEdit(null);
-                }} className="p-2 hover:bg-zinc-800 rounded-full">
-                  <X size={20} />
-                </button>
-              </div>
-
-              <form onSubmit={handleUpdateLeadMainInfo} className="space-y-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Full Name</label>
-                    <input 
-                      required
-                      type="text" 
-                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                      value={leadToEdit.fullName}
-                      onChange={(e) => setLeadToEdit({...leadToEdit, fullName: e.target.value})}
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Phone</label>
-                      <input 
-                        type="tel" 
-                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                        value={leadToEdit.phone}
-                        onChange={(e) => setLeadToEdit({...leadToEdit, phone: e.target.value})}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Email</label>
-                      <input 
-                        type="email" 
-                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
-                        value={leadToEdit.email}
-                        onChange={(e) => setLeadToEdit({...leadToEdit, email: e.target.value})}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <button 
-                  type="submit"
-                  disabled={isSubmitting}
-                  className={cn(
-                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
-                    isSubmitting && "opacity-50 cursor-not-allowed"
-                  )}
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    "Save Changes"
-                  )}
-                </button>
-              </form>
-            </motion.div>
+              <MapPin size={16} className="text-blue-400" />
+              <span className="text-[10px] font-bold uppercase tracking-widest">Recentrar</span>
+            </button>
+            <div className="bg-zinc-900/90 backdrop-blur-md border border-zinc-800 p-3 rounded-xl shadow-xl text-[10px] text-zinc-400 font-bold uppercase tracking-widest">
+              {filteredLeads.filter(l => typeof l.lat === 'number').length} Marcadores en el mapa
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
+
+      {/* Modals */}
+      {isFormOpen && (
+        <LeadForm
+          onSave={editingLead ? handleUpdateLead : handleAddLead}
+          onClose={() => {
+            setIsFormOpen(false);
+            setEditingLead(undefined);
+          }}
+          initialData={editingLead}
+          isLoading={isGeocoding}
+          sequences={sequences}
+        />
+      )}
+
+      {isImporterOpen && (
+        <CSVImporter
+          onImport={handleImportLeads}
+          onClose={() => setIsImporterOpen(false)}
+        />
+      )}
     </div>
   );
-}
+};
 
-// Leads component
+export default Leads;

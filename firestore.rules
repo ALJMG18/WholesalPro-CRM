@@ -8,7 +8,7 @@ service cloud.firestore {
     
     function isAdmin() {
       return isAuthenticated() && 
-        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' || 
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') || 
          (request.auth.token.email == "emmanueltorresconcha@gmail.com" && request.auth.token.email_verified == true));
     }
     
@@ -21,9 +21,33 @@ service cloud.firestore {
     }
     
     function isValidLead(data) {
-      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() < 100 &&
+      return data.fullName is string && data.fullName.size() > 0 && data.fullName.size() < 200 &&
              data.status is string &&
-             data.ownerUid == request.auth.uid;
+             data.ownerUid == request.auth.uid &&
+             (!('deleted' in data) || data.deleted is bool) &&
+             (!('deletedAt' in data) || data.deletedAt == null || data.deletedAt is timestamp) &&
+             (!('sequenceId' in data) || data.sequenceId is string) &&
+             (!('currentStepIndex' in data) || data.currentStepIndex is number) &&
+             (!('lastStepRunAt' in data) || data.lastStepRunAt == null || data.lastStepRunAt is timestamp);
+    }
+
+    function isValidLeadUpdate(data, currentData) {
+      // Allow updating deleted status and other fields as long as ownerUid is unchanged
+      return data.ownerUid == currentData.ownerUid &&
+             (!('fullName' in data) || (data.fullName is string && data.fullName.size() < 200)) &&
+             (!('status' in data) || (data.status is string)) &&
+             (!('deleted' in data) || data.deleted is bool) &&
+             (!('deletedAt' in data) || data.deletedAt == null || data.deletedAt is timestamp) &&
+             (!('sequenceId' in data) || data.sequenceId is string) &&
+             (!('currentStepIndex' in data) || data.currentStepIndex is number) &&
+             (!('lastStepRunAt' in data) || data.lastStepRunAt == null || data.lastStepRunAt is timestamp);
+    }
+
+    function isValidSequence(data) {
+      return data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
+             data.ownerUid == request.auth.uid &&
+             data.steps is list &&
+             data.steps.size() < 50;
     }
 
     function isValidProperty(data) {
@@ -50,6 +74,15 @@ service cloud.firestore {
              data.ownerUid == request.auth.uid;
     }
 
+    function isValidActivity(data) {
+      return data.type is string &&
+             data.description is string && data.description.size() < 1000 &&
+             data.ownerUid == request.auth.uid &&
+             data.createdAt is timestamp &&
+             (!('leadId' in data) || data.leadId == null || data.leadId is string) &&
+             (!('leadName' in data) || data.leadName == null || data.leadName is string);
+    }
+
     // Users
     match /users/{userId} {
       allow read: if isAuthenticated() && (isOwner(userId) || isAdmin());
@@ -69,7 +102,7 @@ service cloud.firestore {
     match /leads/{leadId} {
       allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
       allow create: if isAuthenticated() && isValidLead(request.resource.data);
-      allow update: if isAuthenticated() && (isDocOwner() || isAdmin()) && isValidLead(request.resource.data);
+      allow update: if isAuthenticated() && (isDocOwner() || isAdmin()) && isValidLeadUpdate(request.resource.data, resource.data);
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
 
@@ -110,6 +143,22 @@ service cloud.firestore {
       allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
       allow create: if isAuthenticated() && isValidTemplate(request.resource.data);
       allow update: if isAuthenticated() && (isDocOwner() || isAdmin()) && isValidTemplate(request.resource.data);
+      allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
+    }
+
+    // Activities
+    match /activities/{activityId} {
+      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      allow create: if isAuthenticated() && isValidActivity(request.resource.data);
+      allow update: if false; // Activities are immutable
+      allow delete: if isAdmin();
+    }
+
+    // Sequences
+    match /sequences/{sequenceId} {
+      allow read: if isAuthenticated() && (isDocOwner() || isAdmin());
+      allow create: if isAuthenticated() && isValidSequence(request.resource.data);
+      allow update: if isAuthenticated() && (isDocOwner() || isAdmin()) && isValidSequence(request.resource.data);
       allow delete: if isAuthenticated() && (isDocOwner() || isAdmin());
     }
   }

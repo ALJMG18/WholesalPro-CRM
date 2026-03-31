@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc } from 'firebase/firestore';
-import { db } from '../firebase';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase';
 import { Buyer } from '../types';
-import { Plus, Search, Phone, Mail, MapPin, Trash2, X, Briefcase } from 'lucide-react';
+import { Plus, Search, Phone, Mail, MapPin, Trash2, X, Briefcase, Edit2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
 
@@ -11,9 +11,34 @@ interface BuyersProps {
   user: User;
 }
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+const handleFirestoreError = (error: any, operationType: OperationType, path: string | null) => {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error Details:', JSON.stringify(errInfo, null, 2));
+  return errInfo;
+};
+
 export default function Buyers({ user }: BuyersProps) {
   const [buyers, setBuyers] = useState<Buyer[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [buyerToEdit, setBuyerToEdit] = useState<Buyer | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -33,6 +58,8 @@ export default function Buyers({ user }: BuyersProps) {
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setBuyers(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Buyer)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'buyers');
     });
 
     return () => unsubscribe();
@@ -52,6 +79,25 @@ export default function Buyers({ user }: BuyersProps) {
       setNewBuyer({ fullName: '', phone: '', email: '', buyCriteria: '', areas: '' });
     } catch (error) {
       console.error("Error adding buyer:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleEditBuyer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!buyerToEdit || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      const { id, ...data } = buyerToEdit;
+      await updateDoc(doc(db, 'buyers', id), {
+        ...data,
+        updatedAt: serverTimestamp()
+      });
+      setIsEditModalOpen(false);
+      setBuyerToEdit(null);
+    } catch (error) {
+      console.error("Error updating buyer:", error);
     } finally {
       setIsSubmitting(false);
     }
@@ -109,6 +155,17 @@ export default function Buyers({ user }: BuyersProps) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {!deleteConfirmId && (
+                    <button 
+                      onClick={() => {
+                        setBuyerToEdit(buyer);
+                        setIsEditModalOpen(true);
+                      }}
+                      className="p-2 opacity-0 group-hover:opacity-100 hover:bg-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-all"
+                    >
+                      <Edit2 size={14} />
+                    </button>
+                  )}
                   {deleteConfirmId === buyer.id ? (
                     <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-2">
                       <button 
@@ -251,6 +308,115 @@ export default function Buyers({ user }: BuyersProps) {
                     </>
                   ) : (
                     "Create Buyer"
+                  )}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Edit Buyer Modal */}
+      <AnimatePresence>
+        {isEditModalOpen && buyerToEdit && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setIsEditModalOpen(false);
+                setBuyerToEdit(null);
+              }}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-3xl p-8 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-2xl font-bold">Edit Buyer</h2>
+                <button 
+                  onClick={() => {
+                    setIsEditModalOpen(false);
+                    setBuyerToEdit(null);
+                  }} 
+                  className="p-2 hover:bg-zinc-800 rounded-full"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditBuyer} className="space-y-6">
+                <div className="space-y-4">
+                  <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Full Name</label>
+                    <input 
+                      required
+                      type="text" 
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                      value={buyerToEdit.fullName}
+                      onChange={(e) => setBuyerToEdit({...buyerToEdit, fullName: e.target.value})}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Phone</label>
+                      <input 
+                        type="tel" 
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                        value={buyerToEdit.phone}
+                        onChange={(e) => setBuyerToEdit({...buyerToEdit, phone: e.target.value})}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Email</label>
+                      <input 
+                        type="email" 
+                        className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                        value={buyerToEdit.email}
+                        onChange={(e) => setBuyerToEdit({...buyerToEdit, email: e.target.value})}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Target Areas</label>
+                    <input 
+                      type="text" 
+                      placeholder="e.g. Miami, Orlando, Tampa"
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20"
+                      value={buyerToEdit.areas}
+                      onChange={(e) => setBuyerToEdit({...buyerToEdit, areas: e.target.value})}
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-2 block">Buy Criteria</label>
+                    <textarea 
+                      placeholder="e.g. SFR only, min 10% ROI, 3+ beds..."
+                      className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-white/20 h-24 resize-none"
+                      value={buyerToEdit.buyCriteria}
+                      onChange={(e) => setBuyerToEdit({...buyerToEdit, buyCriteria: e.target.value})}
+                    />
+                  </div>
+                </div>
+
+                <button 
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={cn(
+                    "w-full py-4 bg-white text-black font-bold rounded-xl hover:bg-zinc-200 transition-all flex items-center justify-center gap-2",
+                    isSubmitting && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  {isSubmitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Changes"
                   )}
                 </button>
               </form>

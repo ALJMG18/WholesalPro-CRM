@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { User } from 'firebase/auth';
-import { collection, query, where, onSnapshot, orderBy, Timestamp } from 'firebase/firestore';
-import { db } from '../firebase';
-import { Lead, Property, Task } from '../types';
+import { collection, query, where, onSnapshot, orderBy, limit, Timestamp } from 'firebase/firestore';
+import { auth, db } from '../firebase';
+import { Lead, Property, Task, Activity, ActivityType } from '../types';
 import { 
   Building2, 
   TrendingUp, 
@@ -13,7 +13,13 @@ import {
   Users,
   CheckCircle2,
   AlertCircle,
-  Calendar
+  Calendar,
+  Zap,
+  MessageSquare,
+  Mail as MailIcon,
+  FileText,
+  Trash2,
+  UserPlus
 } from 'lucide-react';
 import { 
   BarChart, 
@@ -34,11 +40,35 @@ interface DashboardProps {
   user: User;
 }
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+const handleFirestoreError = (error: any, operationType: OperationType, path: string | null) => {
+  const errInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth?.currentUser?.uid,
+      email: auth?.currentUser?.email,
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error Details:', JSON.stringify(errInfo, null, 2));
+  return errInfo;
+};
+
 export default function Dashboard({ user }: DashboardProps) {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [buyersCount, setBuyersCount] = useState(0);
   const [properties, setProperties] = useState<Property[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [activities, setActivities] = useState<Activity[]>([]);
   const [stats, setStats] = useState({
     total: 0,
     active: 0,
@@ -48,6 +78,8 @@ export default function Dashboard({ user }: DashboardProps) {
   });
 
   useEffect(() => {
+    if (!user) return;
+
     // Fetch Leads
     const qLeads = query(
       collection(db, 'leads'),
@@ -58,6 +90,23 @@ export default function Dashboard({ user }: DashboardProps) {
     const unsubscribeLeads = onSnapshot(qLeads, (snapshot) => {
       const leadsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Lead));
       setLeads(leadsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'leads');
+    });
+
+    // Fetch Activities
+    const qActivities = query(
+      collection(db, 'activities'),
+      where('ownerUid', '==', user.uid),
+      orderBy('createdAt', 'desc'),
+      limit(10)
+    );
+
+    const unsubscribeActivities = onSnapshot(qActivities, (snapshot) => {
+      const activitiesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Activity));
+      setActivities(activitiesData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'activities');
     });
 
     // Fetch Properties for Pipeline Value
@@ -69,6 +118,8 @@ export default function Dashboard({ user }: DashboardProps) {
     const unsubscribeProps = onSnapshot(qProps, (snapshot) => {
       const propsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Property));
       setProperties(propsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'properties');
     });
 
     // Fetch Buyers
@@ -79,6 +130,8 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const unsubscribeBuyers = onSnapshot(qBuyers, (snapshot) => {
       setBuyersCount(snapshot.docs.length);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'buyers');
     });
 
     // Fetch Tasks
@@ -90,15 +143,31 @@ export default function Dashboard({ user }: DashboardProps) {
 
     const unsubscribeTasks = onSnapshot(qTasks, (snapshot) => {
       setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Task)));
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'tasks');
     });
 
     return () => {
       unsubscribeLeads();
+      unsubscribeActivities();
       unsubscribeProps();
       unsubscribeBuyers();
       unsubscribeTasks();
     };
   }, [user.uid]);
+
+  const getActivityIcon = (type: ActivityType) => {
+    switch (type) {
+      case ActivityType.LEAD_CREATED: return <UserPlus size={14} className="text-blue-400" />;
+      case ActivityType.LEAD_UPDATED: return <Zap size={14} className="text-amber-400" />;
+      case ActivityType.LEAD_DELETED: return <Trash2 size={14} className="text-red-400" />;
+      case ActivityType.SMS_SENT: return <MessageSquare size={14} className="text-emerald-400" />;
+      case ActivityType.EMAIL_SENT: return <MailIcon size={14} className="text-purple-400" />;
+      case ActivityType.TASK_COMPLETED: return <CheckCircle2 size={14} className="text-emerald-400" />;
+      case ActivityType.CONTRACT_GENERATED: return <FileText size={14} className="text-indigo-400" />;
+      default: return <Zap size={14} className="text-zinc-400" />;
+    }
+  };
 
   useEffect(() => {
     // Calculate Stats
@@ -197,7 +266,7 @@ export default function Dashboard({ user }: DashboardProps) {
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h1 className="text-3xl md:text-4xl font-bold tracking-tight">Dashboard</h1>
-          <p className="text-zinc-500 text-sm">Welcome back, {user.displayName?.split(' ')[0]}. Here's your wholesaling summary.</p>
+          <p className="text-zinc-500 text-sm">Welcome back, {user.displayName?.split(' ')?.[0] || 'User'}. Here's your wholesaling summary.</p>
         </div>
         <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border border-zinc-800 rounded-2xl text-[10px] font-bold uppercase tracking-widest text-zinc-500">
           <Clock size={14} />
@@ -374,29 +443,36 @@ export default function Dashboard({ user }: DashboardProps) {
           </div>
         </div>
 
-        {/* Recent Leads */}
+        {/* Activity Feed */}
         <div className="bg-zinc-900/50 border border-zinc-800 p-8 rounded-3xl space-y-6">
-          <h3 className="text-lg font-bold">Recent Leads</h3>
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-bold">Activity Feed</h3>
+            <Zap size={18} className="text-blue-400" />
+          </div>
           <div className="space-y-4">
-            {leads.slice(0, 5).map((lead) => (
-              <div key={lead.id} className="flex items-center justify-between p-4 bg-zinc-800/30 rounded-2xl hover:bg-zinc-800/50 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div 
-                    className="w-2 h-2 rounded-full"
-                    style={{ backgroundColor: getStatusColor(lead.status) }}
-                  />
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold truncate">{lead.fullName}</p>
-                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest">{lead.status}</p>
-                  </div>
+            {activities.map((activity) => (
+              <div key={activity.id} className="flex items-start gap-4 p-4 bg-zinc-800/30 rounded-2xl hover:bg-zinc-800/50 transition-colors">
+                <div className="mt-1 p-2 bg-zinc-900 rounded-lg border border-zinc-800">
+                  {getActivityIcon(activity.type)}
                 </div>
-                <p className="text-[10px] text-zinc-600 font-mono">
-                  {lead.createdAt?.toDate ? lead.createdAt.toDate().toLocaleDateString() : 'N/A'}
-                </p>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-zinc-200">
+                    <span className="font-bold text-white">{activity.leadName || 'System'}</span>
+                    {' '}{activity.description}
+                  </p>
+                  <p className="text-[10px] text-zinc-500 uppercase tracking-widest mt-1">
+                    {activity.createdAt?.toDate ? activity.createdAt.toDate().toLocaleString() : 'Just now'}
+                  </p>
+                </div>
               </div>
             ))}
-            {leads.length === 0 && (
-              <p className="text-sm text-zinc-500 text-center py-8 italic">No leads found</p>
+            {activities.length === 0 && (
+              <div className="py-12 text-center space-y-3">
+                <div className="w-12 h-12 bg-zinc-800 rounded-full flex items-center justify-center mx-auto text-zinc-600">
+                  <Zap size={24} />
+                </div>
+                <p className="text-xs text-zinc-500 italic">No activity recorded yet.</p>
+              </div>
             )}
           </div>
         </div>
