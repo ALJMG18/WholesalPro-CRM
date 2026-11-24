@@ -1,20 +1,14 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, Component, type ReactNode } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, signIn, logOut, db } from './firebase';
-import { 
-  LayoutDashboard, 
-  Users, 
-  Calculator as CalcIcon, 
-  CheckSquare, 
-  LogOut, 
-  Plus, 
+import { auth, logOut, db } from './firebase';
+import {
+  LayoutDashboard,
+  Users,
+  Calculator as CalcIcon,
+  CheckSquare,
+  LogOut,
   Search,
   Building2,
-  TrendingUp,
-  DollarSign,
-  Clock,
-  ChevronRight,
-  X,
   Send,
   ShieldAlert,
   Zap,
@@ -27,12 +21,9 @@ import {
   Zap as ZapIcon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 
 import { cn } from './lib/utils';
-
 import { Toaster } from 'sonner';
 
 import Dashboard from './components/Dashboard';
@@ -52,36 +43,118 @@ import Documents from './components/Documents';
 import Pricing from './components/Pricing';
 import Automations from './components/Automations';
 
-type View = 'dashboard' | 'leads' | 'calculator' | 'tasks' | 'buyers' | 'blast' | 'admin' | 'finder' | 'skiptrace' | 'affiliates' | 'map' | 'settings' | 'documents' | 'pricing' | 'automations';
+type View =
+  | 'dashboard'
+  | 'leads'
+  | 'calculator'
+  | 'tasks'
+  | 'buyers'
+  | 'blast'
+  | 'admin'
+  | 'finder'
+  | 'skiptrace'
+  | 'affiliates'
+  | 'map'
+  | 'settings'
+  | 'documents'
+  | 'pricing'
+  | 'automations';
+
+interface ErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string;
+}
+
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false, errorMessage: '' };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, errorMessage: error?.message || 'Unexpected error' };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('App ErrorBoundary caught an error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="p-6 rounded-xl border border-red-500/30 bg-red-950/20 text-zinc-200 space-y-3">
+          <p className="text-sm font-bold text-red-400">Something went wrong in this view.</p>
+          <p className="text-xs font-mono text-zinc-400">{this.state.errorMessage}</p>
+          <button
+            onClick={() => this.setState({ hasError: false, errorMessage: '' })}
+            className="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-white"
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
   const [leadsCount, setLeadsCount] = useState(0);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
+    const handleResize = () => {
+      setIsDesktop(window.innerWidth >= 1024);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (u) => {
+        setUser(u);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Auth state error:', error);
+        setLoading(false);
+      }
+    );
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, 'leads'), where('ownerUid', '==', user.uid));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setLeadsCount(snapshot.docs.length);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        setLeadsCount(snapshot.docs.length);
+      },
+      (error) => {
+        console.error('Error listening to leads:', error);
+      }
+    );
     return () => unsubscribe();
   }, [user]);
 
   if (loading) {
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-[#0a0a0a]">
-        <motion.div 
+        <motion.div
           animate={{ scale: [1, 1.1, 1], opacity: [0.5, 1, 0.5] }}
           transition={{ duration: 2, repeat: Infinity }}
           className="text-white font-mono text-sm tracking-widest uppercase"
@@ -146,8 +219,8 @@ export default function App() {
       {/* Mobile Header */}
       <header className="lg:hidden flex items-center justify-between p-4 border-b border-zinc-800 bg-[#0a0a0a] z-50">
         <div className="flex items-center gap-3">
-          <img 
-            src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+          <img
+            src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
             className="w-8 h-8 rounded-full border border-zinc-700"
             referrerPolicy="no-referrer"
           />
@@ -159,28 +232,30 @@ export default function App() {
             </div>
           </div>
         </div>
-        <button 
+        <button
           onClick={() => setIsSidebarOpen(!isSidebarOpen)}
           className="p-2 hover:bg-zinc-900 rounded-lg text-zinc-400"
         >
-          {isSidebarOpen ? <Menu size={24} /> : <Menu size={24} />}
+          <Menu size={24} />
         </button>
       </header>
 
       {/* Sidebar - Desktop & Mobile Overlay */}
       <AnimatePresence>
-        {(isSidebarOpen || window.innerWidth >= 1024) && (
+        {(isSidebarOpen || isDesktop) && (
           <>
             {/* Mobile Backdrop */}
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setIsSidebarOpen(false)}
-              className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
-            />
-            
-            <motion.aside 
+            {!isDesktop && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => setIsSidebarOpen(false)}
+                className="lg:hidden fixed inset-0 bg-black/60 backdrop-blur-sm z-40"
+              />
+            )}
+
+            <motion.aside
               initial={{ x: -280 }}
               animate={{ x: 0 }}
               exit={{ x: -280 }}
@@ -190,12 +265,12 @@ export default function App() {
                 !isSidebarOpen && "hidden lg:flex"
               )}
             >
-              {/* Profile Section at the Top (Yellow Area) */}
+              {/* Profile Section at the Top */}
               <div className="p-6 border-b border-zinc-800 bg-zinc-900/30">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="relative">
-                    <img 
-                      src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
+                    <img
+                      src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`}
                       className="w-10 h-10 rounded-full border border-zinc-700 shadow-xl"
                       referrerPolicy="no-referrer"
                     />
@@ -214,7 +289,7 @@ export default function App() {
                       Live v2.2
                     </div>
                   </div>
-                  <button 
+                  <button
                     onClick={logOut}
                     className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
                     title="Logout"
@@ -240,15 +315,18 @@ export default function App() {
                           }}
                           className={cn(
                             "w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-all group",
-                            currentView === item.id 
-                              ? "bg-zinc-800 text-white shadow-lg shadow-black/20" 
+                            currentView === item.id
+                              ? "bg-zinc-800 text-white shadow-lg shadow-black/20"
                               : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/50"
                           )}
                         >
-                          <item.icon size={16} className={cn(
-                            "transition-colors",
-                            currentView === item.id ? "text-emerald-400" : "text-zinc-600 group-hover:text-zinc-400"
-                          )} />
+                          <item.icon
+                            size={16}
+                            className={cn(
+                              "transition-colors",
+                              currentView === item.id ? "text-emerald-400" : "text-zinc-600 group-hover:text-zinc-400"
+                            )}
+                          />
                           {item.label}
                         </button>
                       ))}
@@ -261,11 +339,13 @@ export default function App() {
                 <div className="px-4 py-3 bg-zinc-900/50 rounded-xl border border-zinc-800/50">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Storage</span>
-                    <span className="text-[10px] font-bold text-zinc-400">{Math.min(Math.round((leadsCount / 100) * 100), 100)}%</span>
+                    <span className="text-[10px] font-bold text-zinc-400">
+                      {Math.min(Math.round((leadsCount / 100) * 100), 100)}%
+                    </span>
                   </div>
                   <div className="h-1 w-full bg-zinc-800 rounded-full overflow-hidden">
-                    <div 
-                      className="h-full bg-emerald-500/50 transition-all duration-500" 
+                    <div
+                      className="h-full bg-emerald-500/50 transition-all duration-500"
                       style={{ width: `${Math.min((leadsCount / 100) * 100, 100)}%` }}
                     />
                   </div>
@@ -281,31 +361,33 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={currentView}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-          >
-            {currentView === 'dashboard' && <Dashboard user={user} />}
-            {currentView === 'map' && <MapFinder user={user} />}
-            {currentView === 'leads' && <Leads user={user} />}
-            {currentView === 'documents' && <Documents user={user} />}
-            {currentView === 'pricing' && <Pricing user={user} />}
-            {currentView === 'automations' && <Automations user={user} />}
-            {currentView === 'calculator' && <Calculator />}
-            {currentView === 'tasks' && <Tasks user={user} />}
-            {currentView === 'buyers' && <Buyers user={user} />}
-            {currentView === 'blast' && <Blast user={user} />}
-            {currentView === 'finder' && <PropertyFinder user={user} />}
-            {currentView === 'skiptrace' && <SkipTrace />}
-            {currentView === 'affiliates' && <Affiliates user={user} />}
-            {currentView === 'settings' && <Settings user={user} />}
-            {currentView === 'admin' && isAdmin && <Admin user={user} />}
-          </motion.div>
-        </AnimatePresence>
+        <ErrorBoundary>
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentView}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+            >
+              {currentView === 'dashboard' && <Dashboard user={user} />}
+              {currentView === 'map' && <MapFinder user={user} />}
+              {currentView === 'leads' && <Leads user={user} />}
+              {currentView === 'documents' && <Documents user={user} />}
+              {currentView === 'pricing' && <Pricing user={user} />}
+              {currentView === 'automations' && <Automations user={user} />}
+              {currentView === 'calculator' && <Calculator />}
+              {currentView === 'tasks' && <Tasks user={user} />}
+              {currentView === 'buyers' && <Buyers user={user} />}
+              {currentView === 'blast' && <Blast user={user} />}
+              {currentView === 'finder' && <PropertyFinder user={user} />}
+              {currentView === 'skiptrace' && <SkipTrace />}
+              {currentView === 'affiliates' && <Affiliates user={user} />}
+              {currentView === 'settings' && <Settings user={user} />}
+              {currentView === 'admin' && isAdmin && <Admin user={user} />}
+            </motion.div>
+          </AnimatePresence>
+        </ErrorBoundary>
         <Toaster position="top-right" expand={false} richColors theme="dark" />
       </main>
     </div>
